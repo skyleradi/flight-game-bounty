@@ -1,0 +1,6 @@
+[
+  { "name": "1-air.jpg",   "query": "?shot=air&seed=1" },
+  { "name": "2-cockpit.jpg", "query": "?shot=cockpit&seed=1" },
+  { "name": "3-canyon.jpg", "query": "?shot=canyon&seed=1" },
+  { "name": "4-storm.jpg",  "query": "?shot=storm&seed=1" }
+]

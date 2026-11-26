@@ -1,0 +1,6 @@
+out/
+node_modules/
+dbg*.mjs
+dev-*.mjs
+*.png
+!screenshots/*.png
