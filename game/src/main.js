@@ -39,6 +39,9 @@ const ui = createUI({
   },
 });
 window.__ui = ui;
+// The UI is built after the game (it needs the game to render), and the game needs the UI for the
+// scenes that show an overlay, so the handle is handed over here rather than at construction.
+game.ui = ui;
 
 function announce(text) {
   if (status) status.textContent = text;
@@ -46,9 +49,12 @@ function announce(text) {
 
 const shot = sceneFromLocation();
 if (shot) {
-  // A screenshot frame: no campaign UI, no live loop, one deterministic render.
+  // A screenshot frame: no campaign UI, no live loop, one deterministic render. A scene that *is* a
+  // card (the title, the debrief) opts back in by showing its own overlay, so the root is hidden
+  // first and the scene has the last word.
   title?.classList.add('hidden');
   uiRoot.classList.add('hidden');
+  ui.hide();
   game.resize();
   applyScene(game, shot);
   announce(`Screenshot scene: ${shot}.`);

@@ -200,7 +200,7 @@ export function createUI({ root, game, onStartRound, onRetry, onNext, onQuit }) 
 
   // --- The debrief: the score, its parts, and where to go next. ---------------------------------
   function showDebrief(round, result) {
-    const { grade, line } = gradeFor(result.score / Math.max(1, result.par), result.par);
+    const { grade, line } = gradeFor(result.score, result.par);
     const complete = result.gatesPassed >= result.gatesTotal;
     const lastRound = round.id + 1 >= CAMPAIGN.length;
     const nextOpen = game.progress.unlocked > round.id + 1 || complete;

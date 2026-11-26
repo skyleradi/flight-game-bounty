@@ -827,6 +827,12 @@ export function createGame({ canvas, hudCanvas }) {
     setCinema(c) { cinema = c; },
     get round() { return round; },
     get progress() { return progress; },
+    // The screenshot scenes stand in for a pilot who has flown a few rounds, so they need to write
+    // the campaign record the title card and the debrief both read.
+    setProgress(p) { progress = p; },
+    // Injected by main.js after both exist: a scene that shows an overlay needs the UI handle, and
+    // the UI needs the game, so neither can be built with the other in hand.
+    ui: null,
     get campaign() { return CAMPAIGN; },
     get campaignPar() { return campaignPar(); },
     loadRound, beginRound, endRound,
