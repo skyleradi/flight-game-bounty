@@ -4,6 +4,7 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { AIRCRAFT, PALETTE } from './config.js';
+import { buildFuselage, buildWingPanel } from './aircraft-shape.js';
 
 /**
  * The flight model's own state lives beside the model: the renderer only reads it. Angles are
@@ -54,62 +55,139 @@ export function buildAircraft() {
     color: PALETTE.propeller, roughness: 0.44, metalness: 0.5, envMapIntensity: 1.0,
   });
 
-  // Fuselage: a lathe profile would be smoother, but a tapered cylinder plus a nose cone and a
-  // tail cone gives the same read for a fraction of the vertices.
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.98, 0.82, 6.4, 14), hull);
-  body.rotation.x = Math.PI / 2;
-  body.position.z = 0.2;
+  // Fuselage: one body of revolution, nose to tail. The radius profile is the airframe's real
+  // shape — widest just behind the cockpit, falling away to the fin — so the silhouette is a
+  // continuous curve instead of three cylinders butted together, which is what gave the old model
+  // its toy look. The cowling and the tail get their own lathes so the paint break falls on a
+  // real seam rather than halfway along a tube.
+  const fuselageProfile = [
+    // z, radius
+    [5.62, 0.10], [5.50, 0.30], [5.30, 0.47], [5.05, 0.60],
+    [4.75, 0.70], [4.30, 0.80], [3.70, 0.88], [3.00, 0.94],
+    [2.10, 0.98], [1.20, 0.99], [0.30, 0.97], [-0.60, 0.92],
+    [-1.50, 0.83], [-2.40, 0.71], [-3.20, 0.57], [-3.90, 0.44],
+    [-4.45, 0.33], [-4.85, 0.25], [-5.05, 0.19],
+  ];
+  const body = new THREE.Mesh(buildFuselage(fuselageProfile, 24), hull);
   body.castShadow = true;
+  body.receiveShadow = true;
   group.add(body);
 
-  const nose = new THREE.Mesh(new THREE.CylinderGeometry(0.82, 0.52, 1.5, 14), accent);
-  nose.rotation.x = Math.PI / 2;
-  nose.position.z = 4.15;
-  nose.castShadow = true;
-  group.add(nose);
+  // The cowling: a separate lathe over the nose so the accent paint ends on the seam behind the
+  // engine, the way a real cowl does.
+  const cowlProfile = [
+    [4.78, 0.72], [4.55, 0.79], [4.20, 0.85], [3.75, 0.91], [3.30, 0.95],
+  ];
+  const cowl = new THREE.Mesh(buildFuselage(cowlProfile, 24), accent);
+  cowl.scale.setScalar(1.035);
+  cowl.castShadow = true;
+  group.add(cowl);
 
-  const spinner = new THREE.Mesh(new THREE.ConeGeometry(0.5, 1.1, 12), dark);
+  const spinner = new THREE.Mesh(new THREE.ConeGeometry(0.44, 1.05, 16), dark);
   spinner.rotation.x = -Math.PI / 2;
-  spinner.position.z = 5.45;
+  spinner.position.z = 5.62;
   group.add(spinner);
 
-  // Tail cone tapering to the fin.
-  const tailCone = new THREE.Mesh(new THREE.CylinderGeometry(0.78, 0.3, 2.6, 12), hull);
-  tailCone.rotation.x = Math.PI / 2;
-  tailCone.position.z = -4.1;
-  tailCone.castShadow = true;
-  group.add(tailCone);
-
-  // Canopy: a half-capsule over the wing, its front edge raked forward.
-  const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.86, 14, 10, 0, Math.PI * 2, 0, Math.PI / 2), glass);
-  canopy.scale.set(0.92, 0.78, 1.85);
-  canopy.position.set(0, 0.82, 0.45);
+  // Canopy: a half-capsule over the wing, its front edge raked forward and its rear faired into
+  // the spine. Scaled and positioned off the fuselage radius so it sits on the hull, not floating.
+  const canopy = new THREE.Mesh(
+    new THREE.SphereGeometry(0.80, 20, 14, 0, Math.PI * 2, 0, Math.PI / 2), glass,
+  );
+  canopy.scale.set(0.90, 0.72, 1.95);
+  canopy.position.set(0, 0.72, 0.55);
   group.add(canopy);
+  // A frame hoop at the canopy's rear, which is what stops glass reading as a bubble.
+  const canopyFrame = new THREE.Mesh(new THREE.TorusGeometry(0.72, 0.035, 6, 20, Math.PI), dark);
+  canopyFrame.position.set(0, 0.74, -0.55);
+  canopyFrame.scale.set(1.0, 0.80, 1.0);
+  group.add(canopyFrame);
 
-  // Wing: one box, tapered by scaling the tips through two trapezoans either side.
-  const wingRoot = new THREE.Mesh(new THREE.BoxGeometry(AIRCRAFT.span, 0.26, 1.85), hull);
-  wingRoot.position.set(0, 0.1, 0.5);
-  wingRoot.castShadow = true;
-  group.add(wingRoot);
-
-  // Dihedral tips, so the wing is not a flat plank in the chase view.
+  // Wing: two extruded aerofoil panels, tapered, with washout and five degrees of dihedral. Each
+  // is its own panel rather than one spar through the fuselage, because that is how the dihedral
+  // and the root fillet stay honest on both sides.
+  const halfSpan = AIRCRAFT.span * 0.5;
+  const dihedral = 0.09;
+  const ailerons = [];
+  let navL = null;
+  let navR = null;
   for (const side of [-1, 1]) {
-    const tip = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.2, 1.5), accent);
-    tip.position.set(side * (AIRCRAFT.span * 0.5 + 0.85), 0.24, 0.5);
-    tip.rotation.z = side * -0.14;
-    tip.castShadow = true;
-    group.add(tip);
+    const panel = buildWingPanel({
+      rootChord: 1.95,
+      tipChord: 1.15,
+      semispan: halfSpan,
+      thickness: 1.0,
+      twist: -0.045,
+      sweep: 0.16,
+      side,
+    });
+    const wing = new THREE.Mesh(panel, hull);
+    // Placed through an explicit basis rather than a pile of Euler angles: the panel is extruded
+    // with its chord along local X, thickness along Y and span along Z, and this says directly
+    // where each of those ends up. Local X (leading edge at 0) goes to -Z, so the leading edge sits
+    // forward and the trailing edge behind; local Z (span) goes to +X, outboard.
+    wing.setRotationFromMatrix(new THREE.Matrix4().makeBasis(
+      new THREE.Vector3(0, 0, -1),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(1, 0, 0),
+    ));
+    // The dihedral is a roll in the parent frame, so it needs a wrapper: applied to the mesh it
+    // would roll the section about its own span instead of tipping the tip up.
+    const wingMount = new THREE.Group();
+    wingMount.rotation.z = side * dihedral;
+    wingMount.position.set(0, -0.10, 1.52);
+    wing.castShadow = true;
+    wing.receiveShadow = true;
+    wingMount.add(wing);
+    group.add(wingMount);
+
+    // The aileron sits in the panel's own frame at the trailing edge outboard, as a flat plate.
+    const aileronPivot = new THREE.Group();
+    aileronPivot.position.set(side * (halfSpan * 0.62), -0.03, 1.42);
+    const panelAil = new THREE.Mesh(
+      new THREE.BoxGeometry(halfSpan * 0.52, 0.09, 0.46), accent,
+    );
+    panelAil.position.x = side * halfSpan * 0.26;
+    aileronPivot.add(panelAil);
+    group.add(aileronPivot);
+    ailerons.push({ pivot: aileronPivot, side });
+
+    // Nav light in the wingtip, on a small fairing.
+    const lightMat = side > 0
+      ? new THREE.MeshStandardMaterial({ color: 0xff2b1f, emissive: 0xff2b1f, emissiveIntensity: 4 })
+      : new THREE.MeshStandardMaterial({ color: 0x2bff6a, emissive: 0x2bff6a, emissiveIntensity: 4 });
+    const nav = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), lightMat);
+    nav.position.set(side * (halfSpan + 0.06), -0.12, 1.10);
+    group.add(nav);
+    if (side > 0) navL = nav; else navR = nav;
   }
 
-  // Horizontal stabiliser and the fin.
-  const stab = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.18, 1.15), hull);
-  stab.position.set(0, 0.35, -4.5);
+  // Horizontal stabiliser: the same aerofoil at a much smaller scale, so the tail is not a plank.
+  const stab = new THREE.Mesh(
+    buildWingPanel({ rootChord: 1.15, tipChord: 0.62, semispan: 2.20, thickness: 0.62, twist: 0, sweep: 0.10 }),
+    hull,
+  );
+  stab.setRotationFromMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, 0, -1),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(1, 0, 0),
+  ));
+  stab.position.set(0, 0.30, -3.62);
   stab.castShadow = true;
   group.add(stab);
 
-  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.2, 1.9, 1.5), accent);
-  fin.position.set(0, 1.1, -4.55);
-  fin.rotation.x = -0.12;
+  // Fin: a swept vertical surface, built from the same section rotated into the vertical plane.
+  const fin = new THREE.Mesh(
+    buildWingPanel({ rootChord: 1.45, tipChord: 0.62, semispan: 1.72, thickness: 0.55, twist: 0, sweep: 0.46 }),
+    accent,
+  );
+  // A vertical surface: the chord still runs fore-and-aft, but the span goes up. The thickness
+  // axis lands on -X, which is only a mirror of the symmetric section, so it changes nothing.
+  fin.setRotationFromMatrix(new THREE.Matrix4().makeBasis(
+    new THREE.Vector3(0, 0, -1),
+    new THREE.Vector3(-1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+  ));
+  fin.position.set(0, 0.62, -3.60);
   fin.castShadow = true;
   group.add(fin);
 
@@ -128,18 +206,6 @@ export function buildAircraft() {
   elevator.position.z = 0.31;
   elevatorPivot.add(elevator);
   group.add(elevatorPivot);
-
-  // Ailerons: small slabs at each wing's trailing edge, moving opposite ways.
-  const ailerons = [];
-  for (const side of [-1, 1]) {
-    const pivot = new THREE.Group();
-    pivot.position.set(side * 3.4, 0.1, 1.42);
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.14, 0.5), accent);
-    panel.position.z = 0.25;
-    pivot.add(panel);
-    group.add(pivot);
-    ailerons.push({ pivot, side });
-  }
 
   // Propeller: a disc plus three blades, the disc fading in as the revs rise.
   const propHub = new THREE.Group();
@@ -175,18 +241,6 @@ export function buildAircraft() {
   tailWheel.rotation.z = Math.PI / 2;
   tailWheel.position.set(0, -0.72, -4.3);
   group.add(tailWheel);
-
-  // Nav lights: red left, green right, white on the tail, so the wing reads at distance.
-  // Port is red and starboard green. The model is built nose-along +Z and then turned half a turn
-  // into the flight frame, so the wing that ends up on the pilot's left is the one at +X here.
-  const navL = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 5),
-    new THREE.MeshStandardMaterial({ color: 0xff2b1f, emissive: 0xff2b1f, emissiveIntensity: 4 }));
-  navL.position.set(AIRCRAFT.span * 0.5 + 0.4, 0.24, 0.5);
-  group.add(navL);
-  const navR = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 5),
-    new THREE.MeshStandardMaterial({ color: 0x2bff6a, emissive: 0x2bff6a, emissiveIntensity: 4 }));
-  navR.position.set(-AIRCRAFT.span * 0.5 - 0.4, 0.24, 0.5);
-  group.add(navR);
 
   group.scale.setScalar(1.0);
   return { group, propHub, disc, ailerons, elevatorPivot, rudderPivot, navL, navR };

@@ -79,9 +79,11 @@ function heightAt(noise, x, z, gorge = null) {
   let amp = 1;
   let freq = 1 / 2600;
   let norm = 0;
-  for (let octave = 0; octave < 5; octave += 1) {
+  for (let octave = 0; octave < 6; octave += 1) {
     const n = noise(x * freq, z * freq);
     const ridged = 1 - Math.abs(2 * n - 1);
+    // The last octave is a detail wash rather than another ridge: full-weight ridged noise at
+    // 150 m would corrugate every slope, so its amplitude is dropped and it only roughens.
     h += ridged * amp;
     norm += amp;
     amp *= 0.5;
@@ -337,6 +339,34 @@ export function enhanceTerrainMaterial(material) {
           // Keep the mean where it was: only the spread changes, so the round's palette still rules.
           diffuseColor.rgb *= 0.72 + detail * 0.62;
 
+          // Sedimentary strata: the bands a cliff shows because it was laid down in layers. The
+          // frequency is in world metres of height, so the layers are level and continuous across
+          // a whole face; the phase wanders with horizontal position so no band is ruler-straight.
+          // Warped by the same noise that breaks up the albedo, so the layers are not clean.
+          // The bands have to be tens of metres thick to survive at a kilometre: a 10 m layer is
+          // sub-pixel from the air and averages to flat grey, which is exactly what a plain slope
+          // already looks like. Two sets, a dominant 45 m layer and a finer 12 m one, so the face
+          // reads as bedding with internal lamination rather than as a barcode.
+          float warpY = vTerrainWorld.y + (tFbm(wp * 0.02 + 17.3) - 0.5) * 26.0;
+          float bandBig = fract(warpY * 0.0215);
+          float bandFine = fract(warpY * 0.082 + 0.37);
+          float strataBig = smoothstep(0.0, 0.30, bandBig) * smoothstep(1.0, 0.42, bandBig);
+          float strataFine = smoothstep(0.0, 0.34, bandFine) * smoothstep(1.0, 0.50, bandFine);
+          float strata = strataBig * 0.72 + strataFine * 0.28;
+          // Layers are not equal: a slow noise decides which bands are hard pale rock and which are
+          // soft dark shale, so the face reads as geology rather than as a barcode.
+          float bandTone = tFbm(vec2(warpY * 0.028, wp.x * 0.004 + wp.y * 0.004));
+          vec3 strataTint = mix(vec3(0.66, 0.62, 0.56), vec3(1.16, 1.11, 1.02), bandTone);
+          // The strength is the whole point: at 0.8..1.14 the layers were a rumour. Now the dark
+          // beds drop a third of the value, which is what a shale ledge in sun actually does.
+          diffuseColor.rgb *= mix(vec3(1.0), strataTint * (0.62 + strata * 0.62), rockness);
+
+          // Vertical joints: the cracks that split a face into columns. They run down the slope, so
+          // they are keyed off the horizontal angle around the peak rather than off height.
+          float jointField = tFbm(vec2(atan(wp.y, wp.x) * 46.0, wp.y * 0.05));
+          float joints = smoothstep(0.42, 0.50, jointField) * (1.0 - smoothstep(0.50, 0.58, jointField));
+          diffuseColor.rgb *= 1.0 - joints * 0.30 * rockness;
+
           // A slow hue lean, moss-green in the hollows and dry straw on the ridges.
           float lean = tFbm(wp * 0.028 + 5.9) - 0.5;
           diffuseColor.rgb = mix(
@@ -366,7 +396,7 @@ export function enhanceTerrainMaterial(material) {
       );
   };
   // A shader edit needs a new program key, or three reuses the one it compiled before the edit.
-  material.customProgramCacheKey = () => 'terrain-detail-v1';
+  material.customProgramCacheKey = () => 'terrain-detail-v3';
   return material;
 }
 
@@ -397,57 +427,193 @@ export function buildWater() {
  * mountain slope covered in them has texture of its own instead of reading as a printed pattern.
  * Each instance is also scaled and spun independently, so the rows never line up.
  */
+/** Builds one conifer's merged geometry: a trunk and three tiered canopies. */
+function buildConiferGeometry({ trunkRadius, trunkHeight, tiers }) {
+  const parts = [];
+  const trunk = new THREE.CylinderGeometry(trunkRadius * 0.62, trunkRadius, trunkHeight, 6);
+  trunk.translate(0, trunkHeight * 0.5, 0);
+  parts.push(trunk);
+  for (const t of tiers) {
+    // `openEnded`: the underside of a canopy tier is never seen from the air, and each cap is a
+    // free fan of eight triangles times several thousand trees.
+    const cone = new THREE.ConeGeometry(t.r, t.h, 8, 1, true);
+    cone.translate(t.dx ?? 0, t.y, t.dz ?? 0);
+    parts.push(cone);
+  }
+  return mergeGeometries(parts);
+}
+
+/** A deciduous tree: a rounded crown of two overlapping spheres on a short trunk. */
+function buildBroadleafGeometry({ trunkRadius = 0.42, trunkHeight = 5.5, crown = 4.2 } = {}) {
+  const parts = [];
+  const trunk = new THREE.CylinderGeometry(trunkRadius * 0.7, trunkRadius, trunkHeight, 6);
+  trunk.translate(0, trunkHeight * 0.5, 0);
+  parts.push(trunk);
+  // Two lobes, offset, so the crown is a mass rather than a ball on a stick.
+  const main = new THREE.IcosahedronGeometry(crown, 0);
+  main.scale(1, 0.86, 1);
+  main.translate(0, trunkHeight + crown * 0.55, 0);
+  parts.push(main);
+  const lobe = new THREE.IcosahedronGeometry(crown * 0.62, 0);
+  lobe.scale(1, 0.9, 1);
+  lobe.translate(crown * 0.42, trunkHeight + crown * 1.02, -crown * 0.24);
+  parts.push(lobe);
+  return mergeGeometries(parts);
+}
+
+/**
+ * Scatters a mixed forest over the mid slopes.
+ *
+ * Three species, because one silhouette repeated nine thousand times is the thing that reads as
+ * "low-poly game" faster than any other single decision: a spruce is tall and narrow, a fir is
+ * broader and blunter, and a broadleaf breaks up the conifer rhythm with a rounded crown. Species
+ * follow the land — conifers take the high, exposed ground and the broadleaves stay in the
+ * sheltered valley — so the treeline has a reason instead of a random edge.
+ *
+ * Colour varies per instance through `instanceColor`, which costs one attribute and makes a
+ * hillside of trees read as a living canopy rather than as a stamped texture; scale varies too,
+ * and the density ramps down toward the treeline so the forest does not end on a hard ring.
+ */
 export function buildForest(terrain) {
-  const trunk = new THREE.CylinderGeometry(0.5, 0.8, 8, 6);
-  trunk.translate(0, 4, 0);
-  // Three canopy tiers, each smaller and set a little higher, with a slight random-lean baked in
-  // so even a single tree is not perfectly symmetrical.
-  const tierA = new THREE.ConeGeometry(5.0, 11, 8);
-  tierA.translate(0, 11.5, 0);
-  const tierB = new THREE.ConeGeometry(3.9, 10, 8);
-  tierB.translate(0, 17.5, 0);
-  const tierC = new THREE.ConeGeometry(2.6, 8.5, 8);
-  tierC.translate(0.35, 22.5, 0.2);
+  // --- Species. Each is one merged geometry with vertex colours: green above, trunk below.
+  // Canopy greens, one per species. Mixed toward PALETTE.forest so the palette still rules, but
+  // lifted: at this scale a tree is mostly seen against the sky and has to read as foliage rather
+  // than as a silhouette.
+  const CANOPY = {
+    spruce: 0x44603a,
+    fir: 0x506e40,
+    broadleaf: 0x5e7a44,
+  };
 
-  const merged = mergeGeometries([trunk, tierA, tierB, tierC]);
-  const material = new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: 0.88, metalness: 0, flatShading: true,
+  const spruce = buildConiferGeometry({
+    trunkRadius: 0.55,
+    trunkHeight: 8,
+    tiers: [
+      { r: 5.0, h: 11, y: 11.5 },
+      { r: 3.9, h: 10, y: 17.5 },
+      { r: 2.6, h: 8.5, y: 22.5, dx: 0.35, dz: 0.2 },
+    ],
   });
-  paintByHeight(merged, PALETTE.forest, PALETTE.hullDark);
+  paintByHeight(spruce, CANOPY.spruce, PALETTE.hullDark);
 
-  const trees = [];
+  const fir = buildConiferGeometry({
+    trunkRadius: 0.62,
+    trunkHeight: 7,
+    tiers: [
+      { r: 6.2, h: 9.5, y: 9.0 },
+      { r: 5.2, h: 8.5, y: 14.0 },
+      { r: 3.9, h: 7.5, y: 18.5 },
+      { r: 2.4, h: 6.0, y: 22.6, dx: -0.3, dz: 0.25 },
+    ],
+  });
+  paintByHeight(fir, CANOPY.fir, PALETTE.hullDark);
+
+  const broadleaf = buildBroadleafGeometry();
+  paintByHeight(broadleaf, CANOPY.broadleaf, PALETTE.hullDark);
+
+  const species = [
+    { geometry: spruce, scale: [0.62, 1.50] },
+    { geometry: fir, scale: [0.55, 1.30] },
+    { geometry: broadleaf, scale: [0.75, 1.45] },
+  ];
+
+  // --- Placement. One pass per species, so the species mix is exact rather than emergent.
   const rng = makeRng(WORLD.seed ^ 0x9e37);
   const half = WORLD.size * 0.46;
-  for (let tries = 0; tries < 90000 && trees.length < 9000; tries += 1) {
+  const buckets = species.map(() => []);
+  // A hard budget. The three species push the per-tree cost up, and an uncapped scatter over a
+  // 9 km world will happily place twenty thousand trees and halve the frame rate for a canopy
+  // nobody sees from the cockpit. Capped, the density is still high enough to read as forest.
+  const MAX_TREES = 11000;
+  let placed = 0;
+
+  for (let tries = 0; tries < 220000 && placed < MAX_TREES; tries += 1) {
     const x = (rng() * 2 - 1) * half;
     const z = (rng() * 2 - 1) * half;
     const dist = Math.hypot(x - RUNWAY.x, z - RUNWAY.z);
     if (dist < RUNWAY.basinRadius * 0.95) continue;
     const y = terrain.heightAt(x, z);
-    if (y < 30 || y > 620) continue;
+    if (y < 28 || y > 660) continue;
     // Slope test: no trees on the cliffs.
     const s = Math.abs(terrain.heightAt(x + 26, z) - y) + Math.abs(terrain.heightAt(x, z + 26) - y);
     if (s / 26 > 0.62) continue;
-    trees.push([x, y - 1.2, z, 0.62 + rng() * 1.15, rng() * Math.PI * 2]);
+
+    // The treeline fades out over the last 140 m rather than stopping at a contour: a tree at
+    // 655 m has a coin-flip chance of existing, at 520 m it is certain. Hard edges read as a bug.
+    const treeline = Math.min(1, Math.max(0, (660 - y) / 140));
+    if (rng() > treeline) continue;
+
+    // Species by altitude: conifers dominate up high, broadleaf in the valley. The mix also
+    // shifts with a slow noise, so there are pure stands and mixed stands rather than a uniform
+    // blend everywhere — which is what a real hillside looks like.
+    const stand = terrain.heightAt(x + 700, z - 500) - terrain.heightAt(x, z);
+    const coniferBias = Math.min(1, Math.max(0, (y - 120) / 380 + stand * 0.002));
+    const roll = rng();
+    let pick;
+    if (roll < 0.42 + coniferBias * 0.38) pick = roll < 0.24 + coniferBias * 0.22 ? 0 : 1;
+    else pick = 2;
+    buckets[pick].push([x, y - 1.2, z, rng(), rng()]);
+    placed += 1;
   }
 
-  const instanced = new THREE.InstancedMesh(merged, material, trees.length);
+  // --- One InstancedMesh per species, each with its own per-instance colour.
+  const group = new THREE.Group();
+  group.name = 'forest';
   const matrix = new THREE.Matrix4();
   const quat = new THREE.Quaternion();
   const scale = new THREE.Vector3();
   const pos = new THREE.Vector3();
-  trees.forEach(([x, y, z, size, spin], i) => {
-    pos.set(x, y, z);
-    quat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), spin);
-    scale.set(size, size * (0.85 + (i % 7) * 0.05), size);
-    matrix.compose(pos, quat, scale);
-    instanced.setMatrixAt(i, matrix);
+  const tint = new THREE.Color();
+  const up = new THREE.Vector3(0, 1, 0);
+
+  species.forEach((sp, si) => {
+    const list = buckets[si];
+    if (!list.length) return;
+    const material = new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.88, metalness: 0, flatShading: true,
+    });
+    const instanced = new THREE.InstancedMesh(sp.geometry, material, list.length);
+    instanced.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(list.length * 3), 3);
+
+    list.forEach(([x, y, z, sizeRoll, spinRoll], i) => {
+      const size = sp.scale[0] + sizeRoll * (sp.scale[1] - sp.scale[0]);
+      pos.set(x, y, z);
+      quat.setFromAxisAngle(up, spinRoll * Math.PI * 2);
+      // A per-instance height jitter keeps the canopy from looking like a mown lawn.
+      scale.set(size, size * (0.82 + spinRoll * 0.36), size);
+      matrix.compose(pos, quat, scale);
+      instanced.setMatrixAt(i, matrix);
+
+      // Colour variation. `instanceColor` MULTIPLIES the geometry's vertex colours, which are
+      // already the species' green — so this has to be a tint around white, not another green.
+      // Setting a species colour here (the obvious mistake) squares the green and lands every
+      // tree on the same near-black, which is why a forest can have three species and still read
+      // as one flat mass.
+      //
+      // The modulation is centred on white and spans a full stop either way: below 1 the tree
+      // sits in its own shade, above 1 it catches more sun. A multiplier that only ever darkens
+      // (the natural way to write this) turns the whole hillside into one flat near-black mass,
+      // because the vertex colours are already a dark green before the light ever hits them.
+      const bright = 0.78 + sizeRoll * 0.74;
+      const warm = (spinRoll - 0.5) * 0.16;
+      tint.setRGB(
+        Math.min(1.6, bright + warm),
+        Math.min(1.6, bright + warm * 0.35),
+        Math.min(1.6, bright - warm),
+      );
+      instanced.setColorAt(i, tint);
+    });
+
+    instanced.instanceMatrix.needsUpdate = true;
+    if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
+    instanced.castShadow = true;
+    instanced.receiveShadow = true;
+    group.add(instanced);
   });
-  instanced.instanceMatrix.needsUpdate = true;
-  instanced.castShadow = true;
-  instanced.receiveShadow = true;
-  instanced.name = 'forest';
-  return instanced;
+
+  // A single mesh handle is what the game removes and rebuilds per round; the group stands in for
+  // it so the round-change code keeps working without knowing about species.
+  return group;
 }
 
 function makeRng(seed) {

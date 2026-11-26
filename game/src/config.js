@@ -19,7 +19,7 @@ export const WORLD = {
    * staircase at the silhouette and the ground reads as faceted card. 384 puts a quad every 23 m
    * — 148k vertices, still one draw call, and the ridgelines hold their shape out to the horizon.
    */
-  grid: 384,
+  grid: 512,
   seed: 20261126,
   /** Highest peak the noise may reach, before the runway basin is flattened. */
   peak: 1150,
@@ -136,7 +136,8 @@ export const CAMPAIGN = [
       // between the cold top of the frame and the warm bottom is what makes the still read as a
       // photograph rather than a flat blue day.
       top: '#0e2a55', mid: '#2a5589', low: '#8d6f7d', horizon: '#ffc089',
-      fog: 0xefab74, sun: 0xffc07a, sunIntensity: 3.6, hemi: 1.15,
+      fog: 0xefab74, haze: 0xf2b183, hazeWarm: 0xffd9a6, hazeStrength: 1.25,
+      sun: 0xffc07a, sunIntensity: 3.6, hemi: 1.15,
       sunAzimuth: 2.78, sunElevation: 0.16,
     },
     course: {
@@ -168,7 +169,8 @@ export const CAMPAIGN = [
     debrief: 'You flew the crab instead of fighting it. That is the whole trick.',
     sky: {
       top: '#1d5695', mid: '#4680ba', low: '#9ac0d6', horizon: '#e2ecef',
-      fog: 0xc2d7e2, sun: 0xfff0d4, sunIntensity: 2.5, hemi: 1.05,
+      fog: 0xc2d7e2, haze: 0xa9c8dd, hazeWarm: 0xffeccb, hazeStrength: 0.95,
+      hazeScaleLow: 2600, sun: 0xfff0d4, sunIntensity: 2.5, hemi: 1.05,
       sunAzimuth: 2.05, sunElevation: 0.58,
     },
     course: {
@@ -200,7 +202,8 @@ export const CAMPAIGN = [
     debrief: 'Instrument flying with a stick and a gate. Neatly done.',
     sky: {
       top: '#5d6f80', mid: '#8395a3', low: '#aab8c2', horizon: '#d8dfe3',
-      fog: 0xc6d0d6, sun: 0xf2f4f4, sunIntensity: 1.35, hemi: 1.35,
+      fog: 0xc6d0d6, haze: 0xc3ccd2, hazeWarm: 0xe6ebee, hazeStrength: 1.45,
+      hazeScaleLow: 1500, sun: 0xf2f4f4, sunIntensity: 1.35, hemi: 1.35,
       sunAzimuth: 2.2, sunElevation: 0.44,
     },
     course: {
@@ -232,7 +235,8 @@ export const CAMPAIGN = [
     debrief: 'That is the run the old hands talk about. Except they did it slower.',
     sky: {
       top: '#12457f', mid: '#2f6ba6', low: '#7fa9c8', horizon: '#d6e4ea',
-      fog: 0xaec9d8, sun: 0xfff2d8, sunIntensity: 2.9, hemi: 1.0,
+      fog: 0xaec9d8, haze: 0xbdd4e0, hazeWarm: 0xffeac2, hazeStrength: 0.78,
+      hazeScaleLow: 3200, sun: 0xfff2d8, sunIntensity: 2.9, hemi: 1.0,
       sunAzimuth: 1.72, sunElevation: 0.66,
     },
     course: {
@@ -275,7 +279,8 @@ export const CAMPAIGN = [
     debrief: 'Storm front, ten gates, and a landing in one piece. That is the campaign.',
     sky: {
       top: '#2b3540', mid: '#48555f', low: '#6d7981', horizon: '#98a2a7',
-      fog: 0x8b959b, sun: 0xd8dde0, sunIntensity: 0.75, hemi: 1.15,
+      fog: 0x8b959b, haze: 0x848e94, hazeWarm: 0xb8bcbd, hazeStrength: 2.4,
+      hazeScaleLow: 1200, hazeScaleHigh: 3000, sun: 0xd8dde0, sunIntensity: 0.75, hemi: 1.15,
       sunAzimuth: 1.35, sunElevation: 0.30,
     },
     course: {

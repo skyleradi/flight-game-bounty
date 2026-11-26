@@ -297,11 +297,188 @@ export function buildRain(amount) {
   };
 }
 
-/** Distance haze: fog in the sky's horizon colour, so the far edge of the land dissolves. */
+/**
+ * Distance haze: fog in the sky's horizon colour, so the far edge of the land dissolves.
+ *
+ * A plain linear fog is only half of what makes distance read. Real air does two things a linear
+ * fog cannot: it thickens as you look down into a valley (the path through the air is longer than
+ * the straight line), and it thins as you climb, so a ridge 8 km away and 2 km below the camera is
+ * veiled far more heavily than one 8 km away at eye level. That is why a photo of mountains has
+ * pale, low-contrast foothills under sharp, saturated peaks, and why a single linear fog leaves the
+ * land looking like a table-top model: every ridge the same value regardless of where it sits.
+ *
+ * So `applyFog` keeps the linear term for the hard cut at the world's edge, and
+ * `installAtmosphericHaze` adds the part that depends on height: a per-fragment aerial-perspective
+ * term injected into every scene material, which mixes each surface toward the haze colour by the
+ * length of the air path between it and the camera, and by how much of that air is dense.
+ */
 export function applyFog(scene, theme = null) {
-  const near = theme ? Math.max(300, theme.visibility * 0.16) : 2600;
-  const far = theme ? theme.visibility : 11500;
+  const visibility = theme ? theme.visibility : 11500;
+  // The linear fog starts late and never quite reaches full: it is the floor the height-aware term
+  // builds on, not the only thing standing between the camera and the horizon.
+  const near = Math.max(900, visibility * 0.30);
+  const far = visibility;
   scene.fog = new THREE.Fog(theme?.fog ?? PALETTE.fog, near, far);
+}
+
+/**
+ * Aerial perspective, the part a linear fog cannot do: the air's density is highest at the ground
+ * and falls off with altitude, so the haze a surface collects depends on the *air path* between it
+ * and the camera, not just the distance.
+ *
+ * The model is an exponential atmosphere integrated along the view ray. For a ray of length `d`
+ * whose midpoint sits at height `y`, the optical depth is close to
+ *
+ *     tau = d * density(y)      density(y) = exp(-y / scaleHeight)
+ *
+ * which is cheap, stable, and gives the behaviour the eye expects: looking down into a valley
+ * gathers more air than looking level, and the peaks stand out of the murk while the floor sinks
+ * into it. Two terms are summed, a broad one at 2.2 km and a thin high one at 7 km, so the fade is
+ * not a single clean exponential (which reads as a gradient) but has the slight lift real haze has.
+ *
+ * The colour is not a flat grey: it takes the round's haze colour and brightens toward the sun's
+ * own azimuth, so flying toward the light gives a warm glare and flying away gives the cool blue of
+ * the sky behind. That asymmetry is most of what separates a photograph of mountains from a render.
+ *
+ * Implemented by rewriting the shader of every material in the scene once per round, keyed off
+ * world position, so it costs nothing per frame and nothing to author: no texture, no per-object
+ * setup. `toneMapped: false` is not needed because the mix happens before tone mapping.
+ */
+export function installAtmosphericHaze(scene, theme = null, sunDirection = null) {
+  const hazeColor = new THREE.Color(theme?.haze ?? theme?.fog ?? PALETTE.fog);
+  const scaleLow = theme?.hazeScaleLow ?? 2200;
+  const scaleHigh = theme?.hazeScaleHigh ?? 7000;
+  const strength = theme?.hazeStrength ?? 1.0;
+  // The sun's azimuth, so the haze warms on the lit side of the sky. Y is dropped: this is about
+  // which way you are looking, not how high the sun is.
+  const sunAzimuth = sunDirection
+    ? new THREE.Vector3(sunDirection.x, 0, sunDirection.z).normalize()
+    : new THREE.Vector3(0.6, 0, 0.8).normalize();
+
+  const uniforms = {
+    uHazeColor: { value: hazeColor.clone() },
+    uHazeSunAzimuth: { value: sunAzimuth.clone() },
+    uHazeWarm: { value: new THREE.Color(theme?.hazeWarm ?? 0xffe6c2) },
+    uHazeScaleLow: { value: scaleLow },
+    uHazeScaleHigh: { value: scaleHigh },
+    uHazeStrength: { value: strength },
+  };
+
+  const patched = new Set();
+  const patch = (material) => {
+    if (!material || patched.has(material.uuid)) return;
+    if (material.isMeshBasicMaterial || material.isSpriteMaterial || material.isPointsMaterial) return;
+    if (material.fog === false) return;
+    patched.add(material.uuid);
+
+    // A material may already own `onBeforeCompile` for its own surface details (the terrain's grain
+    // and micro-relief are exactly that). Chaining rather than replacing is what keeps both: the
+    // original runs first against the unmodified source, then the haze pass edits what it produced.
+    const previous = material.onBeforeCompile;
+
+    material.onBeforeCompile = (shader, renderer) => {
+      if (typeof previous === 'function') previous(shader, renderer);
+      Object.assign(shader.uniforms, uniforms);
+      shader.vertexShader = shader.vertexShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          varying vec3 vHazeWorld;`,
+        )
+        .replace(
+          '#include <begin_vertex>',
+          `#include <begin_vertex>
+          vHazeWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;`,
+        );
+
+      shader.fragmentShader = shader.fragmentShader
+        .replace(
+          '#include <common>',
+          `#include <common>
+          varying vec3 vHazeWorld;
+          uniform vec3 uHazeColor;
+          uniform vec3 uHazeSunAzimuth;
+          uniform vec3 uHazeWarm;
+          uniform float uHazeScaleLow;
+          uniform float uHazeScaleHigh;
+          uniform float uHazeStrength;
+
+          // Optical depth of the air between the camera and this fragment. The ray is sampled at
+          // three points rather than integrated exactly: the midpoint alone over-veils a ridge whose
+          // near face is close, and three samples cost nothing while fixing that.
+          float hazeDepth(vec3 a, vec3 b) {
+            vec3 d = b - a;
+            float len = length(d);
+            float t0 = exp(-max(a.y, 0.0) / uHazeScaleLow);
+            float t1 = exp(-max(mix(a.y, b.y, 0.5), 0.0) / uHazeScaleLow);
+            float t2 = exp(-max(b.y, 0.0) / uHazeScaleLow);
+            float low = (t0 + 4.0 * t1 + t2) * (1.0 / 6.0);
+            float h0 = exp(-max(a.y, 0.0) / uHazeScaleHigh);
+            float h1 = exp(-max(mix(a.y, b.y, 0.5), 0.0) / uHazeScaleHigh);
+            float h2 = exp(-max(b.y, 0.0) / uHazeScaleHigh);
+            float high = (h0 + 4.0 * h1 + h2) * (1.0 / 6.0);
+            return len * (low * 0.72 + high * 0.28);
+          }`,
+        )
+        .replace(
+          // Injected before tone mapping, not after: the haze colour is defined in the linear
+          // working space, and `fog_fragment` sits past `colorspace_fragment`, so mixing there
+          // would combine an sRGB-encoded fragment with a linear haze and land on a muddy
+          // midtone. Here the mix is linear, which is where scattering actually happens, and the
+          // result then goes through the same tone curve as everything else.
+          '#include <tonemapping_fragment>',
+          `{
+            // The air path from the eye to this surface, in metres.
+            float path = hazeDepth(cameraPosition, vHazeWorld);
+            // Aerial perspective: how much of the surface's colour the air has replaced.
+            float aerial = 1.0 - exp(-path * 0.000185 * uHazeStrength);
+
+            // The haze is warmer looking into the sun and cooler looking away, the way real
+            // scattering is: forward-scattered light carries the sun's colour, backward the sky's.
+            vec3 toFragment = normalize(vHazeWorld - cameraPosition);
+            float towardSun = max(dot(normalize(vec3(toFragment.x, 0.0, toFragment.z)), uHazeSunAzimuth), 0.0);
+            vec3 haze = mix(uHazeColor, uHazeWarm, pow(towardSun, 2.4) * 0.55);
+
+            gl_FragColor.rgb = mix(gl_FragColor.rgb, haze, clamp(aerial, 0.0, 0.92));
+          }
+          #include <tonemapping_fragment>`,
+        );
+    };
+    material.needsUpdate = true;
+  };
+
+  scene.traverse((object) => {
+    if (!object.isMesh && !object.isInstancedMesh && !object.isPoints && !object.isLine) return;
+    const materials = Array.isArray(object.material) ? object.material : [object.material];
+    materials.forEach(patch);
+  });
+
+  /** Applies the haze to anything added to the scene later (a new round's meshes, for instance). */
+  return {
+    uniforms,
+    /** Re-tints in place when the round changes, without rebuilding the world. */
+    retheme(nextTheme, nextSunDirection) {
+      uniforms.uHazeColor.value.set(nextTheme?.haze ?? nextTheme?.fog ?? PALETTE.fog);
+      uniforms.uHazeWarm.value.set(nextTheme?.hazeWarm ?? 0xffe6c2);
+      uniforms.uHazeScaleLow.value = nextTheme?.hazeScaleLow ?? 2200;
+      uniforms.uHazeScaleHigh.value = nextTheme?.hazeScaleHigh ?? 7000;
+      uniforms.uHazeStrength.value = nextTheme?.hazeStrength ?? 1.0;
+      if (nextSunDirection) {
+        uniforms.uHazeSunAzimuth.value
+          .set(nextSunDirection.x, 0, nextSunDirection.z)
+          .normalize();
+      }
+    },
+    /** Patches a mesh the caller has just built, so late additions are hazed too. */
+    patch,
+    patchObject(root) {
+      root.traverse((object) => {
+        if (!object.isMesh && !object.isInstancedMesh && !object.isPoints && !object.isLine) return;
+        const materials = Array.isArray(object.material) ? object.material : [object.material];
+        materials.forEach(patch);
+      });
+    },
+  };
 }
 
 /**

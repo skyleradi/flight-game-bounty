@@ -15,6 +15,7 @@ import {
   AIRCRAFT, CAMPAIGN, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
 } from './config.js';
 import { buildTerrain, buildWater, buildForest } from './terrain.js';
+import { buildObstacles, checkCollision, collisionDamage } from './obstacles.js';
 import { buildAirfield, buildApproachMarkers } from './airfield.js';
 import { buildAircraft, createAircraftState } from './aircraft.js';
 import { buildCockpit, EYE_HEIGHT, EYE_Z } from './cockpit.js';
@@ -27,7 +28,7 @@ import { createHud } from './hud.js';
 import { createInput, KEY_HELP } from './input.js';
 import {
   applyFog, buildClouds, buildEnvironment, buildLights, buildRain, buildSky, buildSun,
-  rethemeLights,
+  installAtmosphericHaze, rethemeLights,
 } from './sky.js';
 
 const MPS_TO_KNOTS = 1.94384;
@@ -93,6 +94,15 @@ export function createGame({ canvas, hudCanvas }) {
 
   let rain = buildRain(round.rain);
   if (rain) scene.add(rain.object);
+
+  // Aerial perspective, installed once the world is built so every material it can see gets the
+  // pass. Anything added after this point is patched by hand where it is created.
+  const haze = installAtmosphericHaze(scene, round.sky, sun.direction);
+
+  // Obstacles last, so the haze pass can reach them in the same sweep that covers the world.
+  let obstacles = buildObstacles(terrain, round, gates);
+  scene.add(obstacles.group);
+  haze.patchObject(obstacles.group);
 
   const aircraft = buildAircraft();
   // The model is built nose-along +Z, but the flight model's forward is (sin h, 0, -cos h). A
@@ -172,6 +182,11 @@ export function createGame({ canvas, hudCanvas }) {
         scene.add(forest);
       }
       aircraftState.terrain = terrain.heightAt;
+      // Rebuilt geometry means a rebuilt material, and the haze pass is baked into the material's
+      // shader — a new one would otherwise render crisp and unhazed against a hazy world, which
+      // reads as a cut-out pasted on the landscape.
+      haze.patchObject(terrain.mesh);
+      if (forest) haze.patchObject(forest);
     }
 
     // Course.
@@ -180,12 +195,24 @@ export function createGame({ canvas, hudCanvas }) {
     gates = buildCourse(terrain, round);
     gateVisuals = buildGateMeshes(gates, round.radius);
     scene.add(gateVisuals.group);
+    haze.patchObject(gateVisuals.group);
+
+    // Obstacles belong to the round, not the world: their placement is keyed to the gate
+    // positions, so a new course needs a new set or a spire ends up standing in a ring.
+    scene.remove(obstacles.group);
+    obstacles.group.traverse((o) => {
+      if (o.isMesh) o.geometry?.dispose();
+    });
+    obstacles = buildObstacles(terrain, round, gates);
+    scene.add(obstacles.group);
+    haze.patchObject(obstacles.group);
 
     // Sky, sun, lights and haze.
     sky.userData.repaint(round.sky);
     sun.retheme(round.sky);
     rethemeLights(lights, round.sky, sun.direction);
     applyFog(scene, { ...round.sky, visibility: round.visibility });
+    haze.retheme(round.sky, sun.direction);
     // The probe is repainted with the round: a golden-hour sortie reflects a warm horizon, the
     // storm reflects a grey deck. Baking is a single offscreen pass, so a round change can afford it.
     scene.environment?.dispose();
@@ -199,6 +226,7 @@ export function createGame({ canvas, hudCanvas }) {
       drift: 1 + round.wind.speed * 0.06,
     });
     scene.add(clouds.group);
+    haze.patchObject(clouds.group);
     if (rain) scene.remove(rain.object);
     rain = buildRain(round.rain);
     if (rain) scene.add(rain.object);
@@ -471,6 +499,34 @@ export function createGame({ canvas, hudCanvas }) {
       if (e.type === 'flameout') say('Fuel exhausted: glide to the runway.', 6);
     }
 
+    // Obstacles. Tested against the segment the aircraft just flew, not its endpoint, so a mast
+    // cannot be passed through between two frames at cruise speed.
+    const hit = checkCollision(obstacles.colliders, previous, aircraftState.position);
+    if (hit) {
+      const damage = collisionDamage(hit.collider.kind, aircraftState.speed);
+      aircraftState.health = Math.max(0, aircraftState.health - damage);
+      // The aircraft is stopped dead against the obstacle rather than flying on through it: pull
+      // the position back to just before the contact point.
+      const t = Math.max(0, hit.t - 0.02);
+      aircraftState.position.x = previous.x + (aircraftState.position.x - previous.x) * t;
+      aircraftState.position.y = previous.y + (aircraftState.position.y - previous.y) * t;
+      aircraftState.position.z = previous.z + (aircraftState.position.z - previous.z) * t;
+      aircraftState.speed *= 0.18;
+      sortie.peakAltitude = Math.max(sortie.peakAltitude, aircraftState.position.y);
+
+      const label = hit.collider.kind === 'spire' ? 'rock spire'
+        : hit.collider.kind === 'mast' ? 'radio mast'
+        : hit.collider.kind === 'rotor' ? 'turbine rotor'
+        : 'wind turbine';
+      if (aircraftState.health <= 0) {
+        sortie.crashed = true;
+        say(`Struck a ${label}. Airframe destroyed.`, 999);
+        endRound('crash');
+        return;
+      }
+      say(`Struck a ${label}: ${Math.round(damage)} damage.`, 4);
+    }
+
     if (!sortie.started && aircraftState.speed > 4) sortie.started = true;
     if (sortie.started && !sortie.crashed) {
       sortie.elapsed += dt;
@@ -575,6 +631,7 @@ export function createGame({ canvas, hudCanvas }) {
     );
 
     clouds.update(dt, aircraftState.wind);
+    obstacles.update(dt, sortie.time);
     if (rain) rain.update(dt, camera, aircraftState.wind);
 
     drawHud();
@@ -651,6 +708,7 @@ export function createGame({ canvas, hudCanvas }) {
     scene, camera, renderer, terrain, aircraft, aircraftState, sortie, sun, sky, lights,
     restart, resize, hud, input, KEY_HELP,
     get gates() { return gates; },
+    get obstacles() { return obstacles; },
     get gateVisuals() { return gateVisuals; },
     setCinema(c) { cinema = c; },
     get round() { return round; },
