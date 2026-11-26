@@ -4,3 +4,4 @@ dbg*.mjs
 dev-*.mjs
 *.png
 !screenshots/*.png
+transcripts*.tar.gz
