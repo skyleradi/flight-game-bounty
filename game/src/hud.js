@@ -79,11 +79,15 @@ export function createHud(canvas) {
     if (cockpit) {
       drawCompactEngineBlock(16, 86, d, scale * 0.92);
       drawCompactStatus(width - 156 * scale * 0.92 - 16, 86, d, scale * 0.92);
+      drawCompactCombat(width - 156 * scale * 0.92 - 16, 86 + 98 * scale * 0.92, d, scale * 0.92);
     } else {
-      drawEngineBlock(20, height - 122, d, scale);
+      drawEngineBlock(20, height - 146, d, scale);
       drawStatusBar(width - 190, height - 122, d, scale);
+      drawCombatBlock(width - 190, height - 122 - 70 * scale, d, scale);
     }
     drawRoundStrip(20, cockpit ? 132 : 20, d, scale);
+    drawThreatWarning(cx, cy, d, scale);
+    drawDamageVignette(d);
 
     drawGateIndicator(cx, dialY - r - (cockpit ? 30 : 44), d, scale * (cockpit ? 0.9 : 1));
     drawCrosshair(cx, cy * (cockpit ? 0.86 : 0.72));
@@ -341,35 +345,53 @@ export function createHud(canvas) {
     text(`${String(Math.round(heading)).padStart(3, '0')}°`, cx, y + h / 2 + 17, 12.5, 'center', 'rgba(255, 236, 176, 0.98)', 700);
   }
 
-  /** Throttle, flaps, fuel, airframe and the wind, bottom left. */
+  /** Throttle, afterburner, flaps, fuel, airframe and the wind, bottom left. */
   function drawEngineBlock(x, y, d, scale = 1) {
-    const w = 176 * scale, h = 116 * scale;
+    const w = 186 * scale, h = 140 * scale;
     panel(x, y, w, h, 0.5);
 
     // Throttle, with the lever's own readout.
     text('THROTTLE', x + 12, y + 15, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
     text(`${Math.round(d.throttle * 100)}%`, x + w - 12, y + 15, 10.5, 'right', 'rgba(214, 250, 240, 1)', 700);
-    bar(x + 12, y + 24, w - 24, 7, d.throttle, 'rgba(120, 230, 190, 0.95)');
+    bar(x + 12, y + 23, w - 24, 7, d.throttle, 'rgba(120, 230, 190, 0.95)');
+
+    // The afterburner: charge left, and the spool state, because a boost that is lit but not yet
+    // spooled produces no thrust and the pilot needs to see the difference.
+    const boost = Math.max(0, Math.min(1, d.boost ?? 0));
+    const spool = Math.max(0, Math.min(1, d.boostSpool ?? 0));
+    const lit = spool > 0.12;
+    text('BOOST', x + 12, y + 38, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(lit ? (boost < 0.15 ? 'DRY' : spool > 0.8 ? 'LIT' : 'SPOOL') : (boost < 0.99 ? 'RECHRG' : 'READY'),
+      x + w - 12, y + 38, 10, 'right',
+      lit ? 'rgba(255, 170, 96, 1)' : boost > 0.99 ? 'rgba(150, 240, 210, 1)' : 'rgba(160, 200, 220, 0.85)', 700);
+    bar(x + 12, y + 46, w - 24, 7, boost,
+      boost < 0.15 ? 'rgba(255, 110, 80, 0.95)' : lit ? 'rgba(255, 160, 70, 0.98)' : 'rgba(110, 190, 235, 0.95)');
+    // A spool tick rides the bar's right edge so the wind-up is visible, not just inferred.
+    if (lit && spool < 0.98) {
+      const sx = x + 12 + (w - 24) * spool;
+      ctx.fillStyle = 'rgba(255, 238, 200, 0.9)';
+      ctx.fillRect(sx, y + 44, 1.6, 11);
+    }
 
     // Flaps, as two notches rather than a bar: it is a selection, not a level.
-    text('FLAPS', x + 12, y + 46, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text('FLAPS', x + 12, y + 70, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
     const flaps = Math.round((d.flaps ?? 0) * 2) / 2;
     for (let i = 0; i < 2; i += 1) {
       const on = flaps >= i + 1;
       ctx.fillStyle = on ? 'rgba(255, 206, 120, 0.95)' : 'rgba(120, 160, 180, 0.25)';
-      ctx.fillRect(x + 62 + i * 22, y + 41, 16, 9);
+      ctx.fillRect(x + 62 + i * 22, y + 65, 16, 9);
     }
-    text(flaps <= 0 ? 'UP' : flaps >= 2 ? 'FULL' : 'HALF', x + w - 12, y + 46, 10, 'right',
+    text(flaps <= 0 ? 'UP' : flaps >= 2 ? 'FULL' : 'HALF', x + w - 12, y + 70, 10, 'right',
       flaps > 0 ? 'rgba(255, 226, 170, 1)' : 'rgba(150, 190, 210, 0.8)', 700);
 
     // Wind: the direction it blows from, and its speed. This is the round's weather, not a guess.
     if (d.wind) {
       const from = ((d.wind.from % 360) + 360) % 360;
       const label = compassPoint(from);
-      text('WIND', x + 12, y + 68, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+      text('WIND', x + 12, y + 92, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
       // A small arrow, pointing the way the wind blows TOWARD, which is what the pilot cares about.
       const a = ((from + 180) * Math.PI) / 180;
-      const ax = x + 62, ay = y + 68;
+      const ax = x + 62, ay = y + 92;
       ctx.save();
       ctx.strokeStyle = Math.abs(d.wind.speed) > 10 ? 'rgba(255, 170, 120, 0.95)' : 'rgba(180, 220, 235, 0.85)';
       ctx.fillStyle = ctx.strokeStyle;
@@ -382,21 +404,21 @@ export function createHud(canvas) {
       ctx.arc(ax + Math.sin(a) * 7, ay - Math.cos(a) * 7, 2.4, 0, Math.PI * 2);
       ctx.fill();
       ctx.restore();
-      text(`${label} ${Math.round(d.wind.speed)} m/s`, x + w - 12, y + 68, 10.5, 'right',
+      text(`${label} ${Math.round(d.wind.speed)} m/s`, x + w - 12, y + 92, 10.5, 'right',
         Math.abs(d.wind.speed) > 10 ? 'rgba(255, 200, 150, 1)' : 'rgba(200, 240, 250, 1)', 700);
     }
 
     // Fuel and airframe, side by side, at the block's foot.
-    text('FUEL', x + 12, y + 90, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
-    bar(x + 12, y + 99, 68, 8, d.fuel,
+    text('FUEL', x + 12, y + 114, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    bar(x + 12, y + 122, 68, 8, d.fuel,
       d.fuel < 0.18 ? 'rgba(255, 110, 80, 0.95)' : 'rgba(255, 206, 120, 0.95)');
-    text(`${Math.round(d.fuel * 100)}%`, x + 12 + 68, y + 90, 10, 'left',
+    text(`${Math.round(d.fuel * 100)}%`, x + 12 + 68, y + 114, 10, 'left',
       d.fuel < 0.18 ? 'rgba(255, 140, 110, 1)' : 'rgba(255, 226, 170, 1)', 700);
 
-    text('AIRFRAME', x + 96, y + 90, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
-    bar(x + 96, y + 99, 68, 8, d.health,
+    text('AIRFRAME', x + 101, y + 114, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    bar(x + 101, y + 122, 68, 8, d.health,
       d.health < 0.35 ? 'rgba(255, 90, 70, 0.95)' : 'rgba(120, 210, 235, 0.95)');
-    text(`${Math.round(d.health * 100)}%`, x + 96 + 68, y + 90, 10, 'left',
+    text(`${Math.round(d.health * 100)}%`, x + 101 + 68, y + 114, 10, 'left',
       d.health < 0.35 ? 'rgba(255, 140, 110, 1)' : 'rgba(200, 240, 250, 1)', 700);
   }
 
@@ -425,6 +447,50 @@ export function createHud(canvas) {
 
     text('SCORE', x + 12, y + 100, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
     text(String(Math.round(d.score ?? 0)), x + w - 12, y + 100, 16, 'right', 'rgba(255, 236, 176, 0.98)', 700);
+  }
+
+  /**
+   * The combat strip: what is still shooting, and what the pilot has killed.
+   *
+   * Sits above the status bar on the right. It is deliberately separate from the flight
+   * instruments, because the two answer different questions and mixing them into one block makes
+   * both harder to read at a glance.
+   */
+  function drawCombatBlock(x, y, d, scale = 1) {
+    const w = 170 * scale, h = 62 * scale;
+    panel(x, y, w, h, 0.5);
+
+    const air = d.threats ?? null;
+    const alive = air ? air.turretsAlive + air.dronesAlive : 0;
+    const total = air ? air.turretsTotal + air.dronesTotal : 0;
+
+    text('THREATS', x + 12, y + 14, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(total ? `${alive}/${total}` : '—', x + w - 12, y + 14, 11,
+      'right', alive > 0 ? 'rgba(255, 148, 108, 0.98)' : 'rgba(130, 235, 195, 0.95)', 700);
+
+    // One pip per emplacement, red while it is alive and dark grey once it has been strafed, so
+    // the pilot can count what is left without reading a number.
+    if (total > 0 && total <= 14) {
+      const gap = 2.5;
+      const pipW = Math.min(11, (w - 24 - gap * (total - 1)) / total);
+      const slots = [
+        ...(air.turretSlots ?? []).map((on) => (on ? 'rgba(255, 132, 96, 0.95)' : 'rgba(120, 160, 180, 0.24)')),
+        ...(air.droneSlots ?? []).map((on) => (on ? 'rgba(255, 190, 90, 0.95)' : 'rgba(120, 160, 180, 0.24)')),
+      ];
+      for (let i = 0; i < slots.length; i += 1) {
+        ctx.fillStyle = slots[i];
+        ctx.fillRect(x + 12 + i * (pipW + gap), y + 22, pipW, 7);
+      }
+    }
+
+    text('KILLS', x + 12, y + 38, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(String(d.kills ?? 0), x + w - 12, y + 38, 13, 'right',
+      (d.kills ?? 0) > 0 ? 'rgba(255, 226, 150, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
+
+    // The gun: cold while it is not being asked to fire, hot while it is.
+    text('GUNS', x + 12, y + 52, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(d.firing ? 'FIRING' : 'SAFE', x + w - 12, y + 52, 9.5, 'right',
+      d.firing ? 'rgba(255, 224, 130, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
   }
 
   /** Which way and how far to the next gate: an arrow around the compass rose. */
@@ -476,6 +542,80 @@ export function createHud(canvas) {
         : state === 'now' ? 'rgba(255, 214, 90, 0.95)' : 'rgba(120, 160, 180, 0.28)';
       ctx.fillRect(bx, y + 10, notchW, 6);
     }
+  }
+
+  /** A one-line combat readout for the cockpit view, under the status block. */
+  function drawCompactCombat(x, y, d, scale = 1) {
+    const w = 140 * scale, h = 34 * scale;
+    panel(x, y, w, h, 0.52);
+    const air = d.threats ?? null;
+    const alive = air ? air.turretsAlive + air.dronesAlive : 0;
+    text('THREAT', x + 10, y + 12, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(air && (air.turretsTotal + air.dronesTotal) > 0 ? String(alive) : '—', x + w - 10, y + 12, 11,
+      'right', alive > 0 ? 'rgba(255, 148, 108, 0.98)' : 'rgba(130, 235, 195, 0.95)', 700);
+    text('KILLS', x + 10, y + 25, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+    text(String(d.kills ?? 0), x + w - 10, y + 25, 10, 'right',
+      (d.kills ?? 0) > 0 ? 'rgba(255, 226, 150, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
+  }
+
+  /**
+   * The threat warning: a chevron at the edge of the view pointing at the nearest live gun, plus
+   * its range. Without it a flak site behind the aircraft is invisible until it opens fire, which
+   * is a death the pilot cannot learn from.
+   */
+  function drawThreatWarning(cx, cy, d, scale = 1) {
+    const air = d.threats;
+    if (!air || !air.nearest) return;
+    const near = air.nearest;
+    // Only warn inside the range where it can actually hurt, not for every gun on the map.
+    if (near.distance > 1500) return;
+    const hot = near.distance < 900;
+    // The bearing is relative to north, so the aircraft's own heading has to come out of it before
+    // it means anything on a screen that is always drawn nose-up.
+    const rel = (d.threatBearing ?? 0) - (d.heading * Math.PI) / 180;
+    const a = rel - Math.PI / 2;
+    const r = Math.min(width, height) * 0.34;
+    const px = cx + Math.cos(a) * r;
+    const py = cy + Math.sin(a) * r * 0.72;
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(a + Math.PI / 2);
+    ctx.fillStyle = hot ? 'rgba(255, 88, 64, 0.92)' : 'rgba(255, 168, 90, 0.8)';
+    ctx.beginPath();
+    ctx.moveTo(0, 9);
+    ctx.lineTo(-7, -5);
+    ctx.lineTo(0, -1);
+    ctx.lineTo(7, -5);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    text(near.kind === 'drone' ? 'INTERCEPTOR' : 'FLAK', px, py + 20, 8.5, 'center',
+      hot ? 'rgba(255, 130, 100, 0.95)' : 'rgba(255, 190, 140, 0.85)', 700);
+    text(`${(near.distance / 1000).toFixed(1)} km`, px, py + 31, 9, 'center',
+      'rgba(255, 210, 170, 0.8)', 600);
+  }
+
+  /**
+   * A red rim when the airframe is being hit, and a permanent thin one when it is badly damaged.
+   * The vignette is the only feedback for damage that does not require reading a number.
+   */
+  function drawDamageVignette(d) {
+    const flash = Math.max(0, Math.min(1, d.hitFlash ?? 0));
+    const hurt = Math.max(0, Math.min(1, 1 - (d.health ?? 1) / 0.45));
+    const strength = Math.max(flash, hurt * 0.5);
+    if (strength <= 0.01) return;
+
+    const g = ctx.createRadialGradient(
+      width / 2, height / 2, Math.min(width, height) * 0.28,
+      width / 2, height / 2, Math.max(width, height) * 0.72,
+    );
+    g.addColorStop(0, 'rgba(190, 30, 20, 0)');
+    g.addColorStop(0.62, `rgba(190, 34, 22, ${0.16 * strength})`);
+    g.addColorStop(1, `rgba(150, 18, 10, ${0.72 * strength})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, width, height);
   }
 
   /** The fixed reticle at the view's centre. */

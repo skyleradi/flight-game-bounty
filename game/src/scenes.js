@@ -170,6 +170,105 @@ export const SCENES = {
     game.setView('chase');
   },
 
+  /**
+   * The fight: the aircraft rolled in on a flak site with the guns lit, tracer in the air both
+   * ways, and an interceptor closing. This is the shot that shows the game is not only a time
+   * trial — the guns, the afterburner and the damage model are all live in it.
+   */
+  combat(game) {
+    game.loadRound(3, { briefing: false });
+    const site = game.airDefence.turrets[0];
+    if (!site) {
+      // Fall back to the plain valley shot rather than rendering an empty sky.
+      SCENES.air(game);
+      return;
+    }
+    markGates(game, 3);
+    // The geometry of this shot, because it is the whole shot.
+    //
+    // A flak tower shoots *at* the aircraft, so if the aircraft flies straight at the tower the
+    // incoming tracer travels almost parallel to the chase camera's view axis — a measured 0.88
+    // head-on — and every round collapses to a dot. Widening the camera alone does not fix it:
+    // swinging the rig far enough to broaden the tracer throws the aircraft and the tower out of
+    // frame together (measured: every round off-screen at x = 4066).
+    //
+    // What works is staging a *crossing* pass. The aircraft runs past the tower at roughly fifty
+    // degrees off the gun line, so the tracer crosses the frame at a readable angle while the
+    // tower stays in the right third and the aircraft stays centre. Nothing is faked: the tower
+    // still does its own tracking and firing.
+    const dist = 76;
+    const turretOff = 0.88;
+    const nose = 2.32;
+    const fromX = site.x - Math.sin(nose + turretOff) * dist;
+    const fromZ = site.z + Math.cos(nose + turretOff) * dist;
+    // Height is measured *above the ground under the aircraft*, not above the tower's base. The
+    // valley floor at the roll-in point sits sixty-odd metres above the ridge the tower stands on,
+    // so `site.y + 46` put the aircraft at y = 175 with terrain at 192 — seventeen metres under the
+    // hill. It rendered nothing at all: no airframe, no projectiles, just an empty landscape, while
+    // the projection maths cheerfully reported the aircraft at the centre of the frame.
+    const groundHere = game.terrain.heightAt(fromX, fromZ);
+    placeInAir(
+      game.aircraftState,
+      fromX,
+      Math.max(site.y + 46, groundHere + 42),
+      fromZ,
+      nose,
+      108,
+      -0.10,
+      -0.40,
+    );
+    game.aircraftState.fuel = 54;
+    game.aircraftState.health = 82;
+    game.aircraftState.throttle = 1;
+    game.aircraftState.boost = 0.62;
+    game.aircraftState.boostSpool = 1;
+    game.sortie.timeLeft = 138;
+    game.sortie.started = true;
+    game.sortie.score = 664;
+    game.sortie.kills = 1;
+    game.sortie.turretsKilled = 1;
+    // Two seconds of live combat: short enough that the first bursts are still in the air between
+    // the gun and the aircraft, which is the instant the screenshot wants.
+    //
+    // Stepping a fixed two seconds does not achieve that. At 138 m a round covers the distance in
+    // 0.46 s, so a burst fired early in the window has already struck the aircraft and been spliced
+    // out of the list by the time the frame is taken — the shot then shows an empty sky and a gun
+    // sitting on a 2.4 s cooldown. Worse, a plain "are there rounds in the air" test passes on
+    // rounds from a turret two kilometres away, which are irrelevant to the frame. So the warm-up
+    // runs in twelfth-second slices and stops when *this* tower has rounds in flight.
+    for (let i = 0; i < 60; i += 1) {
+      game.warmCombat(1 / 12, { fire: true });
+      if (game.airDefence.bullets.some((b) => b.owner === site)) break;
+    }
+    // The interceptor goes in *after* the warm-up. Parked on the nose before it, the player's own
+    // guns (a tight cone off the nose) shoot it down during the simulation and the shot loses its
+    // opponent. Forty degrees off the nose is outside that cone and inside the frame.
+    const drone = game.airDefence.drones[0];
+    if (drone) {
+      const droneBearing = nose - 0.70;
+      drone.position.set(
+        fromX + Math.sin(droneBearing) * 96,
+        site.y + 52 + 9,
+        fromZ - Math.cos(droneBearing) * 96,
+      );
+      drone.heading = nose + Math.PI;
+      drone.velocity.set(0, 0, 0);
+      drone.alive = true;
+      drone.hp = 12;
+      drone.group.visible = true;
+      drone.cooldown = 0.05;
+    }
+    game.sortie.kills = 1;
+    game.sortie.turretsKilled = 1;
+    // A three-quarter hero arm: close, low, and swung a modest amount to the right. Earlier attempts
+    // failed in opposite directions — a normal chase cam puts the incoming tracer almost parallel to
+    // the view axis (measured 0.88 head-on, so every round projects as a dot), while swinging 70°
+    // round the quarter threw the aircraft and the tower out of the frame together. Fourteen metres
+    // of side offset is enough to give the tracer a cross-frame component without losing the subject.
+    game.setCinema({ back: 0.55, up: 0.45, side: 14 });
+    game.setView('chase');
+  },
+
   /** The home leg: low over the ridge with the airfield coming back into view. */
   home(game) {
     game.loadRound(0, { briefing: false });

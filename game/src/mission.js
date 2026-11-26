@@ -219,7 +219,21 @@ export function gateBearing(gate, position) {
  * pilot is judged on: every gate, a landing rather than a crash, airframe and fuel still in hand,
  * and time left on the clock. The difficulty multiplier is what makes the later rounds worth more.
  */
-export function scoreRound({ round, gatesPassed, landed, crashed, health, fuel, maxFuel, timeLeft, maxTime }) {
+/**
+ * The round's score out of 1000, scaled by the round's difficulty.
+ *
+ * The weights are the design: gates are most of it (620), because the course is the point; the
+ * landing is 200, because flying the course and then bending the aircraft on the runway is not a
+ * finished sortie; airframe and fuel are 70 and 40, so damage is expensive but not fatal to a
+ * score; and time is 70, enough to reward a clean line and not enough to make the pilot rush.
+ *
+ * Kills are added on top rather than taken out of the same 1000, so a pilot who flies the course
+ * perfectly scores 1000 whether or not they shoot anything, and a pilot who also clears the flak
+ * gets a reason to take the risk.
+ */
+export function scoreRound({
+  round, gatesPassed, landed, crashed, health, fuel, maxFuel, timeLeft, maxTime, kills = 0,
+}) {
   const total = round.gates;
   const gatesPart = (gatesPassed / total) * 620;
   const landingPart = landed ? 200 : crashed ? 0 : 80;
@@ -227,7 +241,9 @@ export function scoreRound({ round, gatesPassed, landed, crashed, health, fuel, 
   const fuelPart = Math.max(0, Math.min(1, fuel / maxFuel)) * 40;
   const timePart = Math.max(0, Math.min(1, timeLeft / maxTime)) * 70;
   const raw = gatesPart + landingPart + healthPart + fuelPart + timePart;
-  return Math.round(Math.min(1000, raw * round.difficulty));
+  const base = Math.round(Math.min(1000, raw * round.difficulty));
+  const killBonus = Math.round(kills * 60 * round.difficulty);
+  return base + killBonus;
 }
 
 /** Writes the campaign's progress: which rounds are open, and the best score on each. */

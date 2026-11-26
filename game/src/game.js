@@ -12,12 +12,13 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import {
-  AIRCRAFT, CAMPAIGN, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
+  AIRCRAFT, CAMPAIGN, ENEMY, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
 } from './config.js';
 import { buildTerrain, buildWater, buildForest } from './terrain.js';
 import { buildObstacles, checkCollision, collisionDamage } from './obstacles.js';
 import { buildAirfield, buildApproachMarkers } from './airfield.js';
 import { buildAircraft, createAircraftState } from './aircraft.js';
+import { createAirDefence } from './enemies.js';
 import { buildCockpit, EYE_HEIGHT, EYE_Z } from './cockpit.js';
 import { emptyControls, placeInAir, resetToRunway, stepAircraft, overRunway, runwayProgress } from './physics.js';
 import {
@@ -104,6 +105,10 @@ export function createGame({ canvas, hudCanvas }) {
   scene.add(obstacles.group);
   haze.patchObject(obstacles.group);
 
+  // The air defence belongs to the round, like the obstacles: it is rebuilt when the round changes,
+  // because the count of guns is part of what makes the later sorties hard.
+  let airDefence = createAirDefence({ scene, terrain, round, haze });
+
   const aircraft = buildAircraft();
   // The model is built nose-along +Z, but the flight model's forward is (sin h, 0, -cos h). A
   // wrapper turned half a turn makes the two agree, so the aircraft flies nose-first.
@@ -147,6 +152,15 @@ export function createGame({ canvas, hudCanvas }) {
     fastestGate: null,
     peakAltitude: 0,
     touchdown: null,
+    /** Kills, split by kind, and how much afterburner the pilot spent. */
+    kills: 0,
+    turretsKilled: 0,
+    dronesKilled: 0,
+    boostUsed: 0,
+    /** Decays to zero after each hit; drives the HUD's red rim. */
+    hitFlash: 0,
+    /** True while the trigger is down, for the HUD's gun readout. */
+    firing: false,
   };
 
   let view = 'chase';
@@ -207,6 +221,10 @@ export function createGame({ canvas, hudCanvas }) {
     scene.add(obstacles.group);
     haze.patchObject(obstacles.group);
 
+    // Air defence: torn down and rebuilt with the round, since the number of guns is the round's.
+    airDefence.dispose();
+    airDefence = createAirDefence({ scene, terrain, round, haze });
+
     // Sky, sun, lights and haze.
     sky.userData.repaint(round.sky);
     sun.retheme(round.sky);
@@ -254,6 +272,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.fastestGate = null;
     sortie.peakAltitude = 0;
     sortie.touchdown = null;
+    sortie.kills = 0;
+    sortie.turretsKilled = 0;
+    sortie.dronesKilled = 0;
+    sortie.boostUsed = 0;
     input.setFlaps(0);
     input.setCapturing(true);
     // A round always loads with the pilot's own camera; a screenshot scene sets its framing after.
@@ -288,6 +310,7 @@ export function createGame({ canvas, hudCanvas }) {
       maxFuel: round.fuel,
       timeLeft: sortie.timeLeft,
       maxTime: round.time,
+      kills: sortie.kills,
     });
 
     sortie.score = score;
@@ -334,6 +357,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.fastestGate = null;
     sortie.peakAltitude = 0;
     sortie.touchdown = null;
+    sortie.kills = 0;
+    sortie.turretsKilled = 0;
+    sortie.dronesKilled = 0;
+    sortie.boostUsed = 0;
     input.setFlaps(0);
     input.setCapturing(true);
   }
@@ -527,6 +554,32 @@ export function createGame({ canvas, hudCanvas }) {
       say(`Struck a ${label}: ${Math.round(damage)} damage.`, 4);
     }
 
+    // --- The guns. Fired from the same controls the flight model read, at the aircraft's own
+    // position and heading, so the rounds go where the nose points.
+    sortie.firing = airDefence.fireGuns(dt, aircraftState, controls);
+    airDefence.track(aircraftState.position);
+    const combatEvents = airDefence.update(dt, aircraftState, sortie.time);
+    for (const e of combatEvents) {
+      if (e.type === 'hit') {
+        aircraftState.health = Math.max(0, aircraftState.health - e.damage);
+        sortie.hitsTaken = (sortie.hitsTaken ?? 0) + 1;
+        sortie.hitFlash = Math.min(1, (sortie.hitFlash ?? 0) + 0.55);
+        if (aircraftState.health <= 0) {
+          sortie.crashed = true;
+          say('Airframe destroyed: shot down.', 999);
+          endRound('crash');
+          return;
+        }
+        say(`Hit: ${Math.round(e.damage)} damage.`, 2.4);
+      } else if (e.type === 'kill') {
+        sortie.kills += 1;
+        if (e.kind === 'turret') sortie.turretsKilled += 1;
+        else sortie.dronesKilled += 1;
+        const points = Math.round(ENEMY.killScore * round.difficulty);
+        say(`${e.kind === 'turret' ? 'Flak tower' : 'Interceptor'} destroyed. +${points}`, 2.6);
+      }
+    }
+
     if (!sortie.started && aircraftState.speed > 4) sortie.started = true;
     if (sortie.started && !sortie.crashed) {
       sortie.elapsed += dt;
@@ -574,6 +627,7 @@ export function createGame({ canvas, hudCanvas }) {
       maxFuel: round.fuel,
       timeLeft: sortie.timeLeft,
       maxTime: round.time,
+      kills: sortie.kills,
     });
 
     // The round ends when the pilot is back on the runway, stopped, with the course flown.
@@ -633,6 +687,9 @@ export function createGame({ canvas, hudCanvas }) {
     clouds.update(dt, aircraftState.wind);
     obstacles.update(dt, sortie.time);
     if (rain) rain.update(dt, camera, aircraftState.wind);
+    // The hit flash decays on the render clock, not the physics clock, so a paused frame still
+    // fades instead of freezing a red screen.
+    sortie.hitFlash = Math.max(0, (sortie.hitFlash ?? 0) - dt * 2.6);
 
     drawHud();
     renderer.render(scene, camera);
@@ -650,6 +707,9 @@ export function createGame({ canvas, hudCanvas }) {
     const gate = nextGate(gates);
     const bearing = gate ? gateBearing(gate, s.position) : null;
     const flaps = s.flaps ?? 0;
+    // One status read per frame: it walks every turret and drone, so calling it twice per frame in
+    // a payload literal would double that cost for no gain.
+    const threats = airDefence.status();
     const payload = {
       speed: s.speed * MPS_TO_KNOTS,
       altitude: s.position.y * M_TO_FEET,
@@ -675,6 +735,16 @@ export function createGame({ canvas, hudCanvas }) {
       message: sortie.phase === 'flying' && sortie.time < sortie.messageUntil
         ? message ?? sortie.message : null,
       stall: (s.airspeed ?? s.speed) < 27 * (1 - 0.11 * flaps) && !s.wheelsDown && !s.destroyed,
+
+      // Combat. The afterburner charge and spool are read straight from the flight model, so the
+      // meter and the thrust can never disagree.
+      boost: s.boost ?? 1,
+      boostSpool: s.boostSpool ?? 0,
+      kills: sortie.kills,
+      firing: sortie.firing,
+      hitFlash: sortie.hitFlash,
+      threats,
+      threatBearing: threats.nearest?.bearing ?? 0,
     };
     hud.draw(payload);
     // The cockpit's glass panel shows the same numbers, so it is repainted from the same payload.
@@ -691,6 +761,27 @@ export function createGame({ canvas, hudCanvas }) {
     aircraftState.position.z + Math.cos(aircraftState.heading) * 21,
   );
 
+  /**
+   * Runs the combat simulation forward without moving the aircraft, so a screenshot can show
+   * tracers, drones and a lit gun without the pilot having to fly there first.
+   *
+   * Damage events are discarded on purpose: the point is to compose the shot, not to wound the
+   * airframe the scene then renders.
+   */
+  function warmCombat(seconds, { fire = false } = {}) {
+    const dt = 1 / 60;
+    const controls = { ...emptyControls(), fire };
+    const steps = Math.round(seconds / dt);
+    for (let i = 0; i < steps; i += 1) {
+      sortie.time += dt;
+      airDefence.track(aircraftState.position);
+      if (fire) airDefence.fireGuns(dt, aircraftState, controls);
+      airDefence.update(dt, aircraftState, sortie.time);
+    }
+    sortie.firing = fire;
+    sortie.hitFlash = 0;
+  }
+
   return {
     start() { requestAnimationFrame(frame); },
     /** Renders one frame from the current state, for the screenshot scenes. */
@@ -706,7 +797,30 @@ export function createGame({ canvas, hudCanvas }) {
       renderer.render(scene, camera);
     },
     scene, camera, renderer, terrain, aircraft, aircraftState, sortie, sun, sky, lights,
-    restart, resize, hud, input, KEY_HELP,
+    restart, resize, hud, input, KEY_HELP, warmCombat,
+    /**
+     * Advances the simulation by hand, for tests and for the screenshot harness. The page's own
+     * loop is driven by requestAnimationFrame, which a headless browser throttles; this runs the
+     * exact same step function on a fixed clock so a test can fly a whole sortie deterministically.
+     */
+    simulate(seconds, { dt = STEP } = {}) {
+      const n = Math.max(1, Math.round(seconds / dt));
+      for (let i = 0; i < n; i += 1) {
+        step(dt);
+        if (sortie.finished) break;
+      }
+      syncModel(dt);
+      drawHud();
+    },
+    /** Feeds the input layer a key state without a real keyboard, for tests. */
+    pressKeys(codes, down = true) {
+      input.setKeys?.(codes, down);
+    },
+    /** A vector in the game's own maths library, so tests can place rounds without importing it. */
+    vec3(x, y, z) { return new THREE.Vector3(x, y, z); },
+    // A getter, not a value: the air defence is rebuilt on every round change, so a captured
+    // reference would keep pointing at the first round's empty emplacements.
+    get airDefence() { return airDefence; },
     get gates() { return gates; },
     get obstacles() { return obstacles; },
     get gateVisuals() { return gateVisuals; },

@@ -30,6 +30,11 @@ export function createAircraftState() {
     sinceTakeoff: 0,
     /** Set once the airframe is destroyed: the model stops flying and the sortie ends. */
     destroyed: false,
+    /** Afterburner charge, 0 to 1, and how far the burner has spooled up. */
+    boost: 1,
+    boostSpool: 0,
+    /** Airspeed the wing is actually flying on, which is not the ground speed with wind in it. */
+    airspeed: 0,
   };
 }
 

@@ -28,6 +28,10 @@ export function emptyControls() {
     throttle: 0,
     brake: false,
     flaps: 0,
+    /** True while the afterburner key is held. */
+    boost: false,
+    /** True for the one frame the gun trigger was pulled. */
+    fire: false,
     mouseDeltaX: 0,
     mouseDeltaY: 0,
   };
@@ -114,7 +118,29 @@ export function stepAircraft(state, controls, dt = STEP) {
   state.throttle = Math.min(1, Math.max(0, state.throttle + controls.throttle * dt * 0.85));
 
   const fuelLeft = state.fuel > 0;
-  const thrust = fuelLeft ? AIRCRAFT.maxThrust * state.throttle : 0;
+  const baseThrust = fuelLeft ? AIRCRAFT.maxThrust * state.throttle : 0;
+
+  // --- Afterburner. The charge is a real resource: it burns while lit and refills slowly, so the
+  // pilot has to decide which straight to spend it on. The spool makes it a shove rather than a
+  // step — a boost that arrives instantly reads as a bug, and one that winds up over about a
+  // fifth of a second reads as thrust.
+  const boostCfg = AIRCRAFT.boost;
+  state.boost = state.boost ?? 0;
+  const wantBoost = !!controls.boost && state.boost > 0.02 && fuelLeft;
+  const spoolTarget = wantBoost ? 1 : 0;
+  const spoolRate = boostCfg.spool * dt;
+  state.boostSpool = (state.boostSpool ?? 0)
+    + Math.max(-spoolRate, Math.min(spoolRate, spoolTarget - (state.boostSpool ?? 0)));
+  // Honest charge accounting: the tank empties at exactly the rate of a full tank in `capacity`
+  // seconds, so the HUD's meter and the physics cannot drift apart.
+  if (wantBoost) {
+    state.boost = Math.max(0, state.boost - dt / boostCfg.capacity);
+    if (state.boost <= 0) events.push({ type: 'boostEmpty' });
+  } else {
+    state.boost = Math.min(1, state.boost + dt / boostCfg.recharge);
+  }
+  const lit = state.boostSpool;
+  const thrust = baseThrust * (1 + (boostCfg.thrust - 1) * lit);
 
   // --- Flaps: the pilot selects them, and they move over about a second.
   const wantFlaps = Math.max(0, Math.min(2, controls.flaps ?? 0));
@@ -151,7 +177,10 @@ export function stepAircraft(state, controls, dt = STEP) {
     if (state.speed + accel * dt < 0) accel = -state.speed / dt;
   }
 
-  state.speed = Math.max(0, Math.min(AIRCRAFT.vne, state.speed + accel * dt));
+  // The boost lifts the never-exceed speed as well as the thrust, which is what makes it read as
+  // speed rather than as acceleration: on a long straight the aircraft pulls away from the course,
+  // and on a dive the extra ceiling is the difference between a fast line and a bent one.
+  state.speed = Math.max(0, Math.min(AIRCRAFT.vne + boostCfg.overspeed * lit, state.speed + accel * dt));
   state.airspeed = airspeed;
 
   // --- Control authority falls away with airspeed, so the aircraft must be flown to be steered.
@@ -201,7 +230,16 @@ export function stepAircraft(state, controls, dt = STEP) {
     const lift = airspeed / stalling;
     climb = climb * lift - (1 - lift) * 14;
   }
-  if (!airborne) climb = 0;
+  if (!airborne) {
+    // On the ground the wheels carry the aircraft, but only until the wing is fast enough to fly.
+    // Above the rotation speed, back pressure lifts it off; below it, a nose-up attitude just
+    // raises the tail. Without this gate the aircraft could never leave the runway, because the
+    // ground branch zeroed the climb unconditionally.
+    const rotation = stalling * 1.18;
+    climb = (state.pitch > 0.02 && airspeed > rotation)
+      ? Math.sin(state.pitch) * state.speed
+      : 0;
+  }
   // A gust rolls the airframe bodily: the vertical component is felt as a bump.
   climb += g.y;
   state.climb = climb;
@@ -217,7 +255,10 @@ export function stepAircraft(state, controls, dt = STEP) {
 
   // --- Fuel burn: the throttle costs fuel, and idle still costs a little.
   if (fuelLeft) {
-    const burn = AIRCRAFT.fuelBurn * (AIRCRAFT.idleBurn + (1 - AIRCRAFT.idleBurn) * state.throttle);
+    // Afterburner drinks fuel three times over, which is the second half of its cost: a boost
+    // that is free fuel-wise is a boost the pilot holds down for the whole course.
+    const burn = AIRCRAFT.fuelBurn * (AIRCRAFT.idleBurn + (1 - AIRCRAFT.idleBurn) * state.throttle)
+      * (1 + (AIRCRAFT.boost.burn - 1) * lit);
     const before = state.fuel;
     state.fuel = Math.max(0, state.fuel - burn * dt);
     if (before > 0 && state.fuel <= 0) events.push({ type: 'flameout' });
@@ -275,7 +316,10 @@ export function stepAircraft(state, controls, dt = STEP) {
       state.position.x += Math.cos(state.heading) * push;
       state.position.z += Math.sin(state.heading) * push;
     }
-    if (state.speed < 0.4) state.speed = 0;
+    // Stop the last centimetre per second so a parked aircraft does not creep, but only when the
+    // engine is not making thrust: clamping anything under 0.4 m/s used to zero the first step of
+    // every takeoff roll, which left the aircraft unable to accelerate from a standstill at all.
+    if (state.speed < 0.05 && baseThrust < 0.5) state.speed = 0;
   } else {
     state.wheelsDown = false;
     state.sinceTakeoff += dt;
@@ -321,6 +365,8 @@ export function resetToRunway(state) {
   state.flaps = 0;
   state.fuel = AIRCRAFT.fuel;
   state.health = AIRCRAFT.health;
+  state.boost = 1;
+  state.boostSpool = 0;
   state.onGround = true;
   state.wheelsDown = true;
   state.sinceTakeoff = 0;
@@ -337,6 +383,8 @@ export function placeInAir(state, x, y, z, heading, speed, pitch = 0, bank = 0) 
   state.speed = speed;
   state.airspeed = speed;
   state.throttle = 0.82;
+  state.boost = 1;
+  state.boostSpool = 0;
   state.wheelsDown = false;
   state.destroyed = false;
   state.sinceTakeoff = 30;

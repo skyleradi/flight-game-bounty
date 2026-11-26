@@ -16,10 +16,12 @@ export const WORLD = {
    * Segments per side of the heightfield mesh: (this + 1) squared vertices.
    *
    * At 260 the quads were 35 m across, which is coarse enough that a ridge line turns into a
-   * staircase at the silhouette and the ground reads as faceted card. 384 puts a quad every 23 m
-   * — 148k vertices, still one draw call, and the ridgelines hold their shape out to the horizon.
+   * staircase at the silhouette and the ground reads as faceted card. 384 put a quad every 23 m,
+   * 512 a quad every 17.6 m. 768 is 590k vertices and a 13 m quad, which is where a ridge crest
+   * stops being a chain of visible facets and starts reading as a line — the difference between
+   * "mountain" and "origami" in a still. It is one draw call and still builds in a second.
    */
-  grid: 512,
+  grid: 768,
   seed: 20261126,
   /** Highest peak the noise may reach, before the runway basin is flattened. */
   peak: 1150,
@@ -90,6 +92,64 @@ export const AIRCRAFT = {
 
   /** Crosswind above this many metres a second starts costing airframe on touchdown. */
   crosswindLimit: 5.5,
+
+  /**
+   * Afterburner, on the throttle quadrant's own detent. A limited charge that multiplies thrust and
+   * lifts the never-exceed speed, so the pilot can trade a burst of energy for a tighter line
+   * through the gorge or a way out of a bad approach. It recharges slowly, which is what stops it
+   * from being the answer to every corner: spend it on the straight and the next gate is flown at
+   * whatever the wing will still give.
+   */
+  boost: {
+    /** Thrust multiplier while lit. */
+    thrust: 2.35,
+    /** Extra top speed over VNE, in metres a second. */
+    overspeed: 34,
+    /** Charge, in seconds of continuous burn, and how long a full tank takes to come back. */
+    capacity: 3.6,
+    recharge: 12.0,
+    /** How fast the burn winds up and down, so it hits as a shove and not as a step. */
+    spool: 4.4,
+    /** Fuel is drunk faster while lit. */
+    burn: 3.1,
+  },
+};
+
+/**
+ * The air defence the later rounds put up.
+ *
+ * Two kinds, because a single one is a shooting gallery: **flak towers** are fixed, they track the
+ * aircraft and throw a burst of tracer at it, and the answer is to break the line of sight or fly
+ * outside their reach; **interceptors** are drones that actually chase, and the answer is to turn
+ * inside them or outrun them on the boost. Both fire real projectiles that take real time to
+ * arrive, so a hit is something the pilot could have seen coming.
+ */
+export const ENEMY = {
+  /** A tracer's speed, metres a second. Slow enough to be visibly dodged at range. */
+  bulletSpeed: 300,
+  /** Rounds fired per second, and how far apart the pair in a burst sits. */
+  fireRate: 3.2,
+  burst: 3,
+  /** How far a turret can see and shoot, metres. */
+  range: 1150,
+  /** The cone a turret can actually hit inside, radians. */
+  spread: 0.028,
+  /** Damage one round does to the airframe. */
+  damage: 4.2,
+  /** A turret's own hit points: they can be strafed, and killing one is worth points. */
+  turretHealth: 26,
+  /** Drone behaviour. */
+  drone: {
+    speed: 78,
+    turn: 1.15,
+    range: 900,
+    health: 18,
+    /** How far ahead of the aircraft a drone aims, seconds. */
+    lead: 1.5,
+    damage: 3.4,
+  },
+  /** Points for a kill, before the round's difficulty scales it. */
+  killScore: 60,
 };
 
 /**
@@ -129,16 +189,21 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 13500,
     difficulty: 1.0,
+    /** The valley is friendly airspace: no air defence, so the first round teaches the airframe. */
+    airDefence: { flak: 0, drones: 0 },
     objective: 'Thread six gates, then land back at Harrow Field.',
     debrief: 'A clean first sortie. The aircraft is yours now.',
     sky: {
-      // Golden hour: a deep blue zenith falling through rose to an orange horizon. The contrast
-      // between the cold top of the frame and the warm bottom is what makes the still read as a
-      // photograph rather than a flat blue day.
-      top: '#0e2a55', mid: '#2a5589', low: '#8d6f7d', horizon: '#ffc089',
-      fog: 0xefab74, haze: 0xf2b183, hazeWarm: 0xffd9a6, hazeStrength: 1.25,
-      sun: 0xffc07a, sunIntensity: 3.6, hemi: 1.15,
-      sunAzimuth: 2.78, sunElevation: 0.16,
+      // A clean alpine morning. The palette is deliberately cool and neutral: a golden-hour sun
+      // warm enough to tint the light orange turns every green slope tan and every grey cliff
+      // beige, which is the single fastest way to make procedural land look like painted card.
+      // A near-white sun at 42 degrees keeps the greens green and the rock grey, and it is the
+      // angle that produces the long visible shadows a mountain range needs to read as one.
+      top: '#0a2a5e', mid: '#2c6499', low: '#7fa8c4', horizon: '#d9e8f0',
+      fog: 0xbcd2df, haze: 0xa8c4d8, hazeWarm: 0xffe4bc, hazeStrength: 0.55,
+      hazeScaleLow: 3000,
+      sun: 0xfff6e6, sunIntensity: 3.1, hemi: 1.25,
+      sunAzimuth: 2.62, sunElevation: 0.74,
     },
     course: {
       shape: 'out-and-back',
@@ -165,13 +230,15 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 11500,
     difficulty: 1.15,
+    /** A single flak site on the ridge, so the pilot meets ground fire with room to avoid it. */
+    airDefence: { flak: 2, drones: 0 },
     objective: 'Seven gates with a nine-metre crosswind. Land it straight.',
     debrief: 'You flew the crab instead of fighting it. That is the whole trick.',
     sky: {
-      top: '#1d5695', mid: '#4680ba', low: '#9ac0d6', horizon: '#e2ecef',
-      fog: 0xc2d7e2, haze: 0xa9c8dd, hazeWarm: 0xffeccb, hazeStrength: 0.95,
-      hazeScaleLow: 2600, sun: 0xfff0d4, sunIntensity: 2.5, hemi: 1.05,
-      sunAzimuth: 2.05, sunElevation: 0.58,
+      top: '#164d8f', mid: '#3f7cb8', low: '#95bdd8', horizon: '#dfeaef',
+      fog: 0xbed4e0, haze: 0xa4c2d8, hazeWarm: 0xffeed2, hazeStrength: 0.5,
+      hazeScaleLow: 3000, sun: 0xfff8ec, sunIntensity: 2.9, hemi: 1.2,
+      sunAzimuth: 2.05, sunElevation: 0.66,
     },
     course: {
       shape: 'out-and-back',
@@ -198,13 +265,14 @@ export const CAMPAIGN = [
     rain: 0.12,
     visibility: 5800,
     difficulty: 1.3,
+    airDefence: { flak: 3, drones: 1 },
     objective: 'Eight gates, most of them inside cloud. Climb to the tops.',
     debrief: 'Instrument flying with a stick and a gate. Neatly done.',
     sky: {
-      top: '#5d6f80', mid: '#8395a3', low: '#aab8c2', horizon: '#d8dfe3',
-      fog: 0xc6d0d6, haze: 0xc3ccd2, hazeWarm: 0xe6ebee, hazeStrength: 1.45,
-      hazeScaleLow: 1500, sun: 0xf2f4f4, sunIntensity: 1.35, hemi: 1.35,
-      sunAzimuth: 2.2, sunElevation: 0.44,
+      top: '#55677a', mid: '#7d90a0', low: '#a6b5c0', horizon: '#d4dce1',
+      fog: 0xc2ccd3, haze: 0xbfc9d0, hazeWarm: 0xe6ebee, hazeStrength: 1.15,
+      hazeScaleLow: 1700, sun: 0xf4f6f6, sunIntensity: 1.7, hemi: 1.4,
+      sunAzimuth: 2.2, sunElevation: 0.52,
     },
     course: {
       shape: 'climb',
@@ -231,13 +299,18 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 14000,
     difficulty: 1.55,
+    /** The gorge is a shooting gallery: guns on the rims and drones running the floor. */
+    airDefence: { flak: 4, drones: 2 },
     objective: 'Eight gates down in the gorge. Low, fast, precise.',
     debrief: 'That is the run the old hands talk about. Except they did it slower.',
     sky: {
-      top: '#12457f', mid: '#2f6ba6', low: '#7fa9c8', horizon: '#d6e4ea',
-      fog: 0xaec9d8, haze: 0xbdd4e0, hazeWarm: 0xffeac2, hazeStrength: 0.78,
-      hazeScaleLow: 3200, sun: 0xfff2d8, sunIntensity: 2.9, hemi: 1.0,
-      sunAzimuth: 1.72, sunElevation: 0.66,
+      // Hard midday: the sun is high and the air is thin, so the rock walls get a bright face and
+      // a deep shadowed one. That single high-contrast split is what makes a gorge read as a
+      // gorge rather than as two grey ramps meeting a green floor.
+      top: '#0d3f7c', mid: '#2a6ba8', low: '#7fadcc', horizon: '#d3e3ec',
+      fog: 0xa8c6d6, haze: 0xa6c4d6, hazeWarm: 0xffe6bc, hazeStrength: 0.35,
+      hazeScaleLow: 3600, sun: 0xfffaf0, sunIntensity: 3.5, hemi: 1.1,
+      sunAzimuth: 1.72, sunElevation: 0.98,
     },
     course: {
       shape: 'canyon',
@@ -275,13 +348,14 @@ export const CAMPAIGN = [
     rain: 0.85,
     visibility: 4400,
     difficulty: 1.9,
+    airDefence: { flak: 5, drones: 3 },
     objective: 'Ten gates in a gale, then a crosswind landing in the rain.',
     debrief: 'Storm front, ten gates, and a landing in one piece. That is the campaign.',
     sky: {
-      top: '#2b3540', mid: '#48555f', low: '#6d7981', horizon: '#98a2a7',
-      fog: 0x8b959b, haze: 0x848e94, hazeWarm: 0xb8bcbd, hazeStrength: 2.4,
-      hazeScaleLow: 1200, hazeScaleHigh: 3000, sun: 0xd8dde0, sunIntensity: 0.75, hemi: 1.15,
-      sunAzimuth: 1.35, sunElevation: 0.30,
+      top: '#28323d', mid: '#44515c', low: '#69767e', horizon: '#95a0a6',
+      fog: 0x899399, haze: 0x828c92, hazeWarm: 0xb8bcbd, hazeStrength: 1.9,
+      hazeScaleLow: 1400, hazeScaleHigh: 3200, sun: 0xdde2e5, sunIntensity: 1.05, hemi: 1.25,
+      sunAzimuth: 1.35, sunElevation: 0.36,
     },
     course: {
       shape: 'oval',
@@ -300,15 +374,18 @@ export const PALETTE = {
   sun: 0xfff3dd,
   fog: 0xa8c6dc,
 
-  grassLow: 0x5f7a3a,
-  grassHigh: 0x7c8f4a,
-  forest: 0x33512b,
-  rock: 0x7a7268,
-  rockDark: 0x4e4842,
-  rockLight: 0x9c948a,
-  snow: 0xf4f7fa,
-  sand: 0xc8b184,
-  water: 0x1d4a63,
+  grassLow: 0x6d8a41,
+  grassHigh: 0x93a256,
+  forest: 0x2f4a27,
+  alpine: 0x8a8a5c,
+  scree: 0x9a8b74,
+  rock: 0x857d72,
+  rockDark: 0x474038,
+  rockLight: 0xa8a196,
+  snow: 0xf6f9fc,
+  snowShade: 0xc3d4e6,
+  sand: 0xcbb287,
+  water: 0x1b4a66,
 
   runway: 0x3a3d42,
   runwayLine: 0xe8e6df,

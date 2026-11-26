@@ -19,8 +19,10 @@ export function createInput(canvas) {
   };
 
   const onKeyDown = (e) => {
-    // Space and the arrows would scroll the page; the game owns them while it has focus.
-    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) e.preventDefault();
+    // Space and the arrows would scroll the page and Tab would move focus out of the canvas; the
+    // game owns all of them while it has focus. Tab is the afterburner, so it cannot be allowed to
+    // walk the focus ring or the pilot loses the controls mid-pass.
+    if ([' ', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Tab'].includes(e.key)) e.preventDefault();
     // The flap keys are one-shot, handled here so a held key does not run away.
     if (!e.repeat) {
       if (e.code === 'KeyF') state.flaps = Math.min(2, state.flaps + 1);
@@ -77,6 +79,15 @@ export function createInput(canvas) {
     if (keys.has('ShiftLeft') || keys.has('ShiftRight')) controls.throttle += 1;
     if (keys.has('ControlLeft') || keys.has('ControlRight')) controls.throttle -= 1;
 
+    // Afterburner on Tab (and on B, which some layouts reach more easily). Held, not toggled: the
+    // charge is short enough that holding it down for a corner is exactly the wrong move, and a
+    // toggle would let the pilot forget it is lit.
+    controls.boost = keys.has('Tab') || keys.has('KeyB');
+    // The gun fires from a held trigger; the rate limit lives in the weapon, not here. X is the
+    // primary and Z is the backup, because on some layouts X sits under the same finger as the
+    // throttle and cannot be held comfortably.
+    controls.fire = keys.has('KeyX') || keys.has('KeyZ');
+
     controls.mouseDeltaX = state.mouseDX;
     controls.mouseDeltaY = state.mouseDY;
     // The mouse's travel is spent: the next step starts from zero again.
@@ -100,6 +111,13 @@ export function createInput(canvas) {
     consumePressed,
     keys,
     state,
+    /** Sets or clears key codes directly. Only tests and the screenshot harness use this. */
+    setKeys(codes, down = true) {
+      for (const code of codes) {
+        if (down) keys.add(code);
+        else keys.delete(code);
+      }
+    },
     setCapturing(on) { state.capturing = on; },
     setFlaps(n) { state.flaps = Math.max(0, Math.min(2, n)); },
     getFlaps: () => state.flaps,
@@ -125,6 +143,8 @@ export const KEY_HELP = [
   ['A / D', 'roll left / right'],
   ['Q / E', 'rudder left / right'],
   ['Shift / Ctrl', 'throttle up / down'],
+  ['Tab', 'afterburner'],
+  ['X', 'guns'],
   ['F / V', 'flaps out / in'],
   ['G', 'flaps up'],
   ['Space', 'wheel brakes'],
