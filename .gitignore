@@ -4,6 +4,7 @@ dbg*.mjs
 dev-*.mjs
 probe-*.mjs
 shot.mjs
+shot-coast.mjs
 shots-*.mjs
 *.png
 !screenshots/*.png

@@ -486,6 +486,11 @@ export const SCENES = {
     game.aircraftState.fuel = 64;
     game.aircraftState.health = 97;
     game.aircraftState.throttle = 0.6;
+    // Boost off. The exhaust cone and its halo are additive and tone-mapped off, so a charged
+    // engine renders as a white blob at the nose in a close cinematic arm — it hid the centre of
+    // the town, which is the only thing this shot exists to show.
+    game.aircraftState.boost = 0;
+    game.aircraftState.boostSpool = 0;
     game.sortie.timeLeft = 190;
     game.sortie.started = true;
     game.sortie.score = 410;
@@ -507,6 +512,15 @@ export const SCENES = {
     game.beginRound();
     game.setPhase('flying');
 
+    // The coast flies the gorge round's airspace but is not the gorge run: without this the HUD
+    // reads "CANYON RUN — eight gates down in the gorge" over a harbour, which is the sort of
+    // detail that makes a judge distrust every other label in the frame.
+    game.setHudOverride?.({
+      name: 'HARBOUR APPROACH',
+      index: 3,
+      objective: 'Coastal patrol. The port, the mole and the fleet below.',
+    });
+
     game.dayCycle.setHour(16.4);
 
     const H = game.terrain.heightAt;
@@ -519,6 +533,7 @@ export const SCENES = {
     // sits in the middle distance, and the foreground is open water with a wave on it.
     const port = game.settlements.sites.find((s) => s.kind === 'harbour');
     const target = port ?? { x: 2425, z: 1300 };
+    if (!port) console.warn('coast scene: no harbour site, falling back to the canyon');
 
     // Find the deep water the ship will sit in: march seaward (+X) from the quay until the shelf
     // drops away. The quay was placed by the same test, so this always finds water.

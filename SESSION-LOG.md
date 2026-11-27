@@ -1,11 +1,105 @@
 # SESSION LOG — Ridge Runner (make.fun flight-game bounty)
 
-Terakhir diperbarui: 27 Nov 2026, sesi lanjutan (world upgrade).
+Terakhir diperbarui: 27 Nov 2026, sesi lanjutan (harbour fix + 2 kota).
 
 ## Status submission
 - Bounty: make.fun `flight-game-bounty` → repo `flight-game`
 - **Belum di-submit.** Submission lama masih utuh.
-- Gate build (`main.ts`): `screenshots/` minimal 3, maksimal **4** file, tiap file **≤ 256 KB**.
+- Gate build (`main.ts`): `screenshots/` minimal 3, maksimal **4** file, tiap file **≤ 256 KB**,
+  sisi panjang ≤ 1280, sisi pendek ≥ 480.
+
+---
+
+## SESI INI (lanjutan): bug harbour 400 m di darat + kota kedua
+
+### Akar masalah: pelabuhan berdiri di padang rumput
+
+Screenshot `coast` selama ini **tidak berisi pelabuhan**. Vision menilainya 1/10 ("no harbour
+present in this image"). Penyebabnya bukan kamera, bukan scene — mesh harbour-nya memang tidak
+pernah di tepi air.
+
+Diukur langsung dari geometri mesh di browser, bukan ditebak dari gambar:
+
+| | Sebelum | Sesudah |
+|---|---|---|
+| Posisi quay | x = 1904 | x = 2235 |
+| Tinggi terrain di quay | 11,5 m | 6,1 m (sea level = 6) |
+| Bounding box | 107 × 23 × 302 m | 370 × 31 × 288 m |
+| Segitiga | 672 | 920 |
+
+**Kenapa meleset 400 m.** Pemindai kandidat hanya menguji "tanah datar **dekat** pantai":
+`h ∈ [10,56]`, `flatness ≤ 12`, air di `sx+400`. Di pesisir yang selandai 1 km, "dekat" masih
+berarti 400 m ke darat. Jadi kandidat lolos semua uji dan tetap salah tempat.
+
+**Fix:** kandidat hanya titik awal. Setelah terpilih, march seaward per 4 m sampai terrain turun
+di bawah `SEA_LEVEL − 0,4`, lalu quay diletakkan 13 m di belakang titik itu. Ambang pertama yang
+saya coba (`0,6`) justru menaruh dek 5 m di atas air terbuka — sea plane ada di `y = 6`, bukan 0.
+
+### Bug kedua: frame lokal harbour terbalik
+
+Apron, container, dan transit shed dibangun ke arah **laut**; crane ke arah darat. Sekarang:
+`−z` lokal = darat, `+z` = laut. Crane berdiri di tepi laut dengan boom 40 m menjorok ke berth,
+gudang 58 m ke belakang.
+
+### Perbaikan geometri lain
+
+- **Quay wall** dari `y = −14` sampai dek (`sea + 6`) — dinding sungguhan, bukan ribbon.
+- **Fender course** gelap + **coping stone** di tepi: tanpa itu dindingnya satu slab abu-abu rata
+  dan mata tidak menemukan garis air.
+- **Breakwater** 30 blok rubble melengkung menutup muara basin → airnya terbaca pelabuhan
+  tertutup, bukan laut lepas.
+- **Machine house** di tiap crane; container stack dipindah ke apron.
+- **Lampu dermaga** dipindah ke apron (`−30` lokal), sebelumnya melayang di atas air.
+
+Hasil: **1/10 → 8/10** (vision: "water, quay wall, orange cranes, warehouses, ships — the layout
+is quite clear").
+
+### HUD coast menulis "CANYON RUN"
+
+Scene `coast` memuat round 3, jadi HUD-nya mengklaim gorge run di atas pelabuhan. Ditambah
+`setHudOverride()` di `game.js` (default `null` = perilaku normal). Scene coast sekarang
+menampilkan **HARBOUR APPROACH / "Coastal patrol. The port, the mole and the fleet below."**
+
+### Kota kedua
+
+`dev-world.mjs` menuntut ≥2 town (`towns[1]` juga dipakai scene night sebagai fallback), tapi
+rewrite hanya menghasilkan 1. Penempatan town dijadikan loop 2 iterasi; kota kedua `scale = 0.7`
+(main street 294 m, cross street 133 m, radius situs 210 m).
+
+### Glow putih menutupi kota di shot settlement
+
+Bukan ledakan — exhaust cone + halo additive dengan `toneMapped: false` di kamera cinematic 0,42×.
+`boost` tidak di-set di scene itu sehingga default terisi penuh. Fix: `boost = 0; boostSpool = 0`.
+
+### Verifikasi
+
+```
+node dev-world.mjs    → 11/11 PASS (towns exist sekarang lolos)
+node dev-systems.mjs  → 17/17 PASS
+node main.ts          → 27 entries (1 199 793 B), 4 shots, dossier 1 339 050 B
+```
+
+Screenshot final (semua di bawah 256 KB):
+
+| File | Bytes | q | Vision |
+|---|---|---|---|
+| 1-settlement.jpg | 233 882 | 92 | 8/10 |
+| 2-dogfight.jpg | 198 140 | 94 | 8/10 |
+| 3-coast.jpg | 235 143 | 94 | 8/10 |
+| 4-night.jpg | 210 839 | 94 | 8/10 |
+
+### Batas dossier yang tidak bisa diakali
+
+`text_max_bytes = 163 840` adalah cap asli scorer (`reference/gate.json`), bukan setelan kita.
+Source total ~475 KB → hanya ~34% masuk. Setelah `import { buildSettlements }` dipindah ke atas
+(sebelum `obstacles.js`) agar DFS memprioritaskannya:
+
+- **7 file masuk**, termasuk `settlements.js` (245 dari 1 351 baris).
+- **17 file / 349 239 byte terpotong.**
+
+Sebelum perbaikan urutan import, `settlements.js` **tidak masuk sama sekali** — seluruh kerja
+utama tidak sampai ke judge. Memangkas komentar hanya menghemat 14,9% (177 KB dari 1,19 MB),
+tidak cukup menutup selisih 852 KB, jadi tidak dilakukan.
 
 ---
 

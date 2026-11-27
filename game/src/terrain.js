@@ -740,7 +740,7 @@ function placeInstances({ group, geometry, list, scaleRange, tintFn, flat = true
  *  - **Boulders** — instanced rock on the scree slopes and in the gorge, which is what makes the
  *    bare rock in the terrain shader look like it has something sitting on it.
  */
-export function buildForest(terrain) {
+export function buildForest(terrain, clearings = []) {
   const CANOPY = {
     spruce: 0x3d5a30,
     fir: 0x4a6a3a,
@@ -830,10 +830,46 @@ export function buildForest(terrain) {
   const shrubs = [];
   const boulders = [];
 
+  /**
+   * A spatial hash of the clearings the inhabited layer asked for: town footprints, field plots and
+   * the road corridor. Linear scanning 3 000 circles for each of 17 000 trees is 51 million distance
+   * tests at build time — measurable in a freeze — so the circles are bucketed on a 200 m grid and a
+   * query only looks at its own cell plus the eight around it.
+   */
+  const CLEAR_CELL = 200;
+  const clearingGrid = new Map();
+  for (const c of clearings) {
+    const gx0 = Math.floor((c.x - c.r) / CLEAR_CELL);
+    const gx1 = Math.floor((c.x + c.r) / CLEAR_CELL);
+    const gz0 = Math.floor((c.z - c.r) / CLEAR_CELL);
+    const gz1 = Math.floor((c.z + c.r) / CLEAR_CELL);
+    for (let i = gx0; i <= gx1; i += 1) {
+      for (let j = gz0; j <= gz1; j += 1) {
+        const k = `${i},${j}`;
+        let list = clearingGrid.get(k);
+        if (!list) { list = []; clearingGrid.set(k, list); }
+        list.push(c);
+      }
+    }
+  }
+  /** True if (x,z) is inside a settlement, a field or the road corridor. */
+  function cleared(x, z) {
+    const list = clearingGrid.get(`${Math.floor(x / CLEAR_CELL)},${Math.floor(z / CLEAR_CELL)}`);
+    if (!list) return false;
+    for (const c of list) {
+      const dx = x - c.x;
+      const dz = z - c.z;
+      if (dx * dx + dz * dz < c.r * c.r) return true;
+    }
+    return false;
+  }
+
   /** True where a tree can stand: off the airfield, dry land, inside the treeline, not on a cliff. */
   function plantable(x, z) {
     const dist = Math.hypot(x - RUNWAY.x, z - RUNWAY.z);
     if (dist < RUNWAY.basinRadius * 0.92) return null;
+    // Nothing grows through a roof, in a barley field, or on the asphalt.
+    if (cleared(x, z)) return null;
     const y = terrain.heightAt(x, z);
     // Nothing grows below the waterline or in the salt spray just above it: the coast would
     // otherwise be a forest standing in the sea, which is the tell that the carve was bolted on

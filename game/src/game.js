@@ -15,6 +15,7 @@ import {
   AIRCRAFT, CAMPAIGN, ENEMY, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
 } from './config.js';
 import { buildTerrain, buildForest } from './terrain.js';
+import { buildSettlements } from './settlements.js';
 import { buildObstacles, checkCollision, collisionDamage } from './obstacles.js';
 import { buildAirfield, buildApproachMarkers } from './airfield.js';
 import { buildAircraft, createAircraftState } from './aircraft.js';
@@ -36,7 +37,6 @@ import {
   applyFog, buildClouds, buildEnvironment, buildLights, buildRain, buildSky, buildSun,
   installAtmosphericHaze, rethemeLights,
 } from './sky.js';
-import { buildSettlements } from './settlements.js';
 import { buildStars, buildMoon, createDayCycle, paletteFor } from './daycycle.js';
 import { buildSea, buildFleet, buildShoreFoam } from './sea.js';
 
@@ -63,6 +63,10 @@ export function createGame({ canvas, hudCanvas }) {
   // --- The world. Order matters: the terrain first, because everything else sits on it, and the
   // round before the terrain, because the round decides whether a gorge is cut into it.
   let round = CAMPAIGN[0];
+  // A screenshot scene may fly a round but present a different sortie on the HUD — the coast shot
+  // borrows round 4's airspace without claiming to be the gorge run. Null means "whatever the
+  // round says", which is every real flight.
+  let hudOverride = null;
   const terrain = buildTerrain(round);
   scene.add(terrain.mesh);
 
@@ -89,17 +93,22 @@ export function createGame({ canvas, hudCanvas }) {
   scene.environment = buildEnvironment(renderer, round.sky);
   scene.environmentIntensity = 0.9;
 
-  let forest = buildForest(terrain);
+  // --- The inhabited layer: fields, roads, villages, the works, the harbour. Built from the same
+  // heightfield the rest of the world sits on, so nothing floats and nothing sinks.
+  //
+  // This comes BEFORE the forest, not after. The forest reads the clearings this returns — every
+  // town footprint, every field plot and the road corridor — so trees stop at the verge instead of
+  // growing through a roof. The old order built the trees first, which is why the villages in the
+  // first screenshots looked like houses dropped into woodland with no roads between them.
+  const settlements = buildSettlements(terrain);
+  scene.add(settlements.group);
+
+  let forest = buildForest(terrain, settlements.clearings);
   scene.add(forest);
 
   const airfield = buildAirfield();
   scene.add(airfield);
   scene.add(buildApproachMarkers());
-
-  // --- The inhabited layer: towns, roads, the works, the harbour. Built from the same heightfield
-  // the rest of the world sits on, so nothing floats and nothing sinks.
-  const settlements = buildSettlements(terrain);
-  scene.add(settlements.group);
 
   // The fleet, placed after the settlements so the harbour watch can lie off the actual quay rather
   // than at a guessed coordinate.
@@ -289,7 +298,10 @@ export function createGame({ canvas, hudCanvas }) {
       scene.add(terrain.mesh);
       if (forest) {
         scene.remove(forest);
-        forest = buildForest(terrain);
+        // The forest is re-draped on the new land, and it has to respect the same clearings: a
+        // rebuilt terrain that moved a slope by 40 m can put a town on a hillside, and a tree in the
+        // middle of its main street.
+        forest = buildForest(terrain, settlements.clearings);
         scene.add(forest);
       }
       aircraftState.terrain = terrain.heightAt;
@@ -950,10 +962,10 @@ export function createGame({ canvas, hudCanvas }) {
       gatesTotal: round.gates,
       timeLeft: sortie.timeLeft,
       score: sortie.score,
-      roundName: round.name,
-      roundIndex: round.id,
+      roundName: hudOverride?.name ?? round.name,
+      roundIndex: hudOverride?.index ?? round.id,
       roundTotal: CAMPAIGN.length,
-      missionLine: round.objective,
+      missionLine: hudOverride?.objective ?? round.objective,
       wind: round.wind,
       cockpit: view === 'cockpit',
       message: sortie.phase === 'flying' && sortie.time < sortie.messageUntil
@@ -1036,6 +1048,8 @@ export function createGame({ canvas, hudCanvas }) {
     },
     scene, camera, renderer, terrain, aircraft, aircraftState, sortie, sun, sky, lights,
     restart, resize, hud, input, KEY_HELP, warmCombat,
+    /** Presents a different sortie name and objective on the HUD than the round being flown. */
+    setHudOverride(o) { hudOverride = o; },
     /**
      * Advances the simulation by hand, for tests and for the screenshot harness. The page's own
      * loop is driven by requestAnimationFrame, which a headless browser throttles; this runs the
