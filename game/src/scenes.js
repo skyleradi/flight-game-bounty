@@ -12,6 +12,16 @@ import { CAMPAIGN, RUNWAY } from './config.js';
 import { placeInAir } from './physics.js';
 import { nextGate, scoreRound, styleGate } from './mission.js';
 import { coastAt } from './sea.js';
+
+/**
+ * A sortie-clock value at which the anti-collision strobe is dark.
+ *
+ * The strobe's own cycle is `(time / 1.2) % 1`, lit while that fraction is below 0.06 or between
+ * 0.13 and 0.19. Every screenshot scene renders a single frame from a clock that starts at zero,
+ * so without this the flash lands in every still as a white blob over the fuselage. 0.6 s is the
+ * middle of the dark half of the cycle, far from both windows.
+ */
+const STROBE_DARK = 0.6;
 /** Marks the first `n` gates as flown and highlights the one the pilot is flying to. */
 function markGates(game, n) {
   game.gates.forEach((g, i) => {
@@ -486,9 +496,10 @@ export const SCENES = {
     game.aircraftState.fuel = 64;
     game.aircraftState.health = 97;
     game.aircraftState.throttle = 0.6;
-    // Boost off. The exhaust cone and its halo are additive and tone-mapped off, so a charged
-    // engine renders as a white blob at the nose in a close cinematic arm — it hid the centre of
-    // the town, which is the only thing this shot exists to show.
+    // Boost off: the exhaust cones are additive, so a charged engine paints two hot streaks under
+    // the cowl that pull the eye off the town this shot exists to show. (The white halo over the
+    // fuselage was a different thing — the tail strobe, lit because the frame was rendered at
+    // sortie.time 0; applyScene now parks the clock past the flash for every scene.)
     game.aircraftState.boost = 0;
     game.aircraftState.boostSpool = 0;
     game.sortie.timeLeft = 190;
@@ -730,6 +741,11 @@ export function applyScene(game, name) {
   const scene = SCENES[name];
   if (!scene) return false;
   scene(game);
+  // The sortie clock starts at zero, and the anti-collision strobe is lit for the first 6% of its
+  // 1.2 s cycle — so a frame rendered at t=0 catches the flash every single time and the white
+  // halo sits on the fuselage in every still. Park the clock just after the flash instead: the
+  // strobe is dark, and nothing else in a still is sensitive to the phase.
+  game.sortie.time = STROBE_DARK;
   game.renderNow();
   return true;
 }
