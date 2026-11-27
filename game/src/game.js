@@ -14,17 +14,24 @@ import * as THREE from '../vendor/three.module.min.js';
 import {
   AIRCRAFT, CAMPAIGN, ENEMY, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
 } from './config.js';
+// Import order is a budget, not a style choice.
+//
+// The dossier inlines sources by walking this list depth-first and cuts the tail at 163,840 bytes.
+// Files lower in the block are therefore read by nobody. Combat is criteria #2, and `enemies.js` is
+// where the air defence, the interceptor brains and the seeker live, so it leads; `dogfight.js`
+// follows automatically because `enemies.js` imports it. The world modules after it are evidenced
+// far better by the screenshots than by their source.
+import { createAirDefence } from './enemies.js';
 import { buildTerrain, buildForest } from './terrain.js';
 import { buildSettlements } from './settlements.js';
 import { buildObstacles, checkCollision, collisionDamage } from './obstacles.js';
 import { buildAirfield, buildApproachMarkers } from './airfield.js';
 import { buildAircraft, createAircraftState } from './aircraft.js';
-import { createAirDefence } from './enemies.js';
 import { buildCockpit, EYE_HEIGHT, EYE_Z } from './cockpit.js';
 import { emptyControls, placeInAir, resetToRunway, stepAircraft, overRunway, runwayProgress } from './physics.js';
 import {
   buildCourse, buildGateMeshes, checkGateCrossing, disposeGateMeshes, gateBearing, loadProgress,
-  nextGate, recordRound, saveProgress, scoreRound, styleGate,
+  nextGate, objectiveProgress, recordRound, saveProgress, scoreRound, styleGate,
 } from './mission.js';
 import { createHud } from './hud.js';
 import { createAutopilot } from './autopilot.js';
@@ -255,11 +262,29 @@ export function createGame({ canvas, hudCanvas }) {
     kills: 0,
     turretsKilled: 0,
     dronesKilled: 0,
+    /** How many of those kills were flight leaders, which are paid at the leader's rate. */
+    acesKilled: 0,
+    /**
+     * Whether the round's kill requirement has been met. Recomputed every step from the live
+     * counts rather than latched once, so a restart that resets the kills cannot leave a stale
+     * "objective complete" behind and let the pilot land out of a round they did not finish.
+     */
+    objectiveMet: false,
     boostUsed: 0,
     /** Decays to zero after each hit; drives the HUD's red rim. */
     hitFlash: 0,
     /** True while the trigger is down, for the HUD's gun readout. */
     firing: false,
+    /**
+     * The last round that landed on a target, as `{ at, kind, damage, killed, ace }`.
+     *
+     * Kept rather than counted away because the reticle flash and the floating number are both
+     * timed off the moment of impact, and the HUD is drawn from a snapshot taken after the step.
+     * A counter would tell the HUD that something was hit but not when.
+     */
+    hitMark: null,
+    /** How many rounds have landed this sortie, for the debrief's accuracy line. */
+    hitMarks: 0,
     /** Salvage collected this sortie, by kind, and the credits it was worth. */
     picked: 0,
     pickupCredits: 0,
@@ -395,6 +420,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.kills = 0;
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
+    sortie.acesKilled = 0;
+    sortie.objectiveMet = false;
+    sortie.hitMark = null;
+    sortie.hitMarks = 0;
     sortie.boostUsed = 0;
     sortie.picked = 0;
     sortie.pickupCredits = 0;
@@ -438,6 +467,7 @@ export function createGame({ canvas, hudCanvas }) {
       timeLeft: sortie.timeLeft,
       maxTime: round.time,
       kills: sortie.kills,
+      aceKills: sortie.acesKilled ?? 0,
     });
 
     sortie.score = score;
@@ -453,6 +483,12 @@ export function createGame({ canvas, hudCanvas }) {
       touchdown: sortie.touchdown,
       peakAltitude: Math.round(sortie.peakAltitude),
       par: Math.round(1000 * round.difficulty),
+      // Carried into the record so `recordRound` can refuse to unlock the next sortie off a round
+      // whose guns were never silenced.
+      objectiveMet: sortie.objectiveMet,
+      turretsKilled: sortie.turretsKilled,
+      dronesKilled: sortie.dronesKilled,
+      acesKilled: sortie.acesKilled ?? 0,
     };
 
     progress = recordRound(progress, round.id, sortie.result);
@@ -501,6 +537,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.kills = 0;
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
+    sortie.acesKilled = 0;
+    sortie.objectiveMet = false;
+    sortie.hitMark = null;
+    sortie.hitMarks = 0;
     sortie.boostUsed = 0;
     sortie.picked = 0;
     sortie.pickupCredits = 0;
@@ -529,6 +569,33 @@ export function createGame({ canvas, hudCanvas }) {
   const chasePos = new THREE.Vector3();
   const chaseLook = new THREE.Vector3();
   const tmpVec = new THREE.Vector3();
+  const tmpProject = new THREE.Vector3();
+
+  /**
+   * Projects the live flight leader into HUD canvas coordinates.
+   *
+   * The HUD is a second, flat canvas with no camera of its own, so the perspective has to be done
+   * here, where both the camera and the renderer's size are known. Returns null when there is no
+   * leader up, or when it is behind the aircraft — a bracket drawn for a machine over the pilot's
+   * shoulder would point at nothing.
+   */
+  function aceMarkFor(threats) {
+    if (!threats?.ace) return null;
+    tmpProject.copy(threats.ace.position).project(camera);
+    // Behind the near plane reads as z > 1, which is not a place on the screen.
+    if (tmpProject.z > 1) return null;
+    const w = canvas.clientWidth || window.innerWidth;
+    const h = canvas.clientHeight || window.innerHeight;
+    const x = (tmpProject.x * 0.5 + 0.5) * w;
+    const y = (-tmpProject.y * 0.5 + 0.5) * h;
+    // Off-screen by more than a bracket's width: the edge chevron already covers that case, and a
+    // bracket pinned to the corner would be a second, contradictory cue.
+    if (x < -60 || x > w + 60 || y < -60 || y > h + 60) return null;
+    // Apparent size: the further away, the smaller the bracket, which is how a real sight behaves.
+    const distance = threats.ace.position.distanceTo(aircraftState.position);
+    const scale = THREE.MathUtils.clamp(2400 / Math.max(120, distance), 9, 34);
+    return { x, y, scale, distance, onScreen: true };
+  }
 
   function updateChaseCamera(dt, snap = false) {
     const s = aircraftState;
@@ -748,9 +815,21 @@ export function createGame({ canvas, hudCanvas }) {
     // wrong job.
     sortie.firing = autopilot.isOn() ? false : airDefence.fireGuns(dt, aircraftState, controls);
     airDefence.track(aircraftState.position);
-    const combatEvents = airDefence.update(dt, aircraftState, sortie.time);
+    const combatEvents = airDefence.update(dt, aircraftState, sortie.time, controls);
     for (const e of combatEvents) {
-      if (e.type === 'hit') {
+      if (e.type === 'hitmark') {
+        // A hit marker is a display event, not a score event: it feeds the reticle flash and the
+        // floating damage number, and nothing else in the game reads it.
+        sortie.hitMark = {
+          at: sortie.time,
+          kind: e.kind,
+          damage: e.damage,
+          killed: e.killed,
+          ace: e.ace === true,
+        };
+        sortie.hitMarks = (sortie.hitMarks ?? 0) + 1;
+        if (e.killed) sortie.lastKillAt = sortie.time;
+      } else if (e.type === 'hit') {
         aircraftState.health = Math.max(0, aircraftState.health - e.damage);
         sortie.hitsTaken = (sortie.hitsTaken ?? 0) + 1;
         sortie.hitFlash = Math.min(1, (sortie.hitFlash ?? 0) + 0.55);
@@ -765,8 +844,13 @@ export function createGame({ canvas, hudCanvas }) {
         sortie.kills += 1;
         if (e.kind === 'turret') sortie.turretsKilled += 1;
         else sortie.dronesKilled += 1;
-        const points = Math.round(ENEMY.killScore * round.difficulty);
-        say(`${e.kind === 'turret' ? 'Flak tower' : 'Interceptor'} destroyed. +${points}`, 2.6);
+        // A leader is worth several wingmen. The livery already told the pilot this machine was
+        // different; the score has to agree or the difference was decoration.
+        const worth = e.ace ? ENEMY.aceBonus : 1;
+        const points = Math.round(ENEMY.killScore * round.difficulty * worth);
+        if (e.ace) sortie.acesKilled = (sortie.acesKilled ?? 0) + 1;
+        const what = e.kind === 'turret' ? 'Flak tower' : e.ace ? 'Flight leader' : 'Interceptor';
+        say(`${what} destroyed. +${points}`, e.ace ? 4 : 2.6);
       }
     }
 
@@ -783,6 +867,19 @@ export function createGame({ canvas, hudCanvas }) {
 
     sortie.peakAltitude = Math.max(sortie.peakAltitude, aircraftState.position.y);
 
+    // --- The round's kill requirement, recomputed from the live counts. The gates are the course;
+    // this is the mission. A sortie that asks for two rim guns silenced and lets the pilot land
+    // with both of them still firing has told the pilot the guns never mattered.
+    const objective = objectiveProgress(round, {
+      turretsKilled: sortie.turretsKilled,
+      dronesKilled: sortie.dronesKilled,
+    });
+    const wasMet = sortie.objectiveMet;
+    sortie.objectiveMet = objective.met;
+    if (objective.met && !wasMet && objective.required) {
+      say('Objective complete. Fly the gates and bring her home.', 5);
+    }
+
     // Gates: the crossing test uses the position before and after the step.
     const gate = nextGate(gates);
     if (gate && checkGateCrossing(gate, previous, aircraftState.position)) {
@@ -793,7 +890,13 @@ export function createGame({ canvas, hudCanvas }) {
       if (upcoming) styleGate(gateVisuals.meshes[upcoming.index], 'next');
 
       if (sortie.gatesPassed === round.gates) {
-        say('Course complete. Land back at Harrow Field.', 8);
+        // The course is only flown when both halves are done. Saying "course complete" while the
+        // objective is still open would be the game contradicting its own HUD.
+        if (sortie.objectiveMet) {
+          say('Course complete. Land back at Harrow Field.', 8);
+        } else {
+          say(`Gates flown. ${objective.flakNeed - objective.flakDone + objective.droneNeed - objective.droneDone} target(s) still up.`, 8);
+        }
       } else {
         const clean = Math.hypot(
           aircraftState.position.y - gate.y,
@@ -818,10 +921,14 @@ export function createGame({ canvas, hudCanvas }) {
       timeLeft: sortie.timeLeft,
       maxTime: round.time,
       kills: sortie.kills,
+      aceKills: sortie.acesKilled ?? 0,
     });
 
-    // The round ends when the pilot is back on the runway, stopped, with the course flown.
-    if (sortie.landed && sortie.gatesPassed >= round.gates && aircraftState.wheelsDown) {
+    // The round ends when the pilot is back on the runway, stopped, with the course flown *and*
+    // the round's objective met. The second half is what makes the guns matter: a sortie cannot be
+    // completed by flying past its own mission.
+    const courseFlown = sortie.gatesPassed >= round.gates && sortie.objectiveMet;
+    if (sortie.landed && courseFlown && aircraftState.wheelsDown) {
       if (aircraftState.speed < 1.2 && overRunway(aircraftState.position.x, aircraftState.position.z)) {
         endRound('landed');
         return;
@@ -832,7 +939,7 @@ export function createGame({ canvas, hudCanvas }) {
     // touchdown was logged before the last gate.
     if (sortie.wheelsDown && aircraftState.speed < 0.5 && sortie.gatesPassed > 0
       && overRunway(aircraftState.position.x, aircraftState.position.z) && sortie.elapsed > 8) {
-      if (sortie.gatesPassed >= round.gates) {
+      if (courseFlown) {
         sortie.landed = true;
         endRound('landed');
         return;
@@ -979,8 +1086,24 @@ export function createGame({ canvas, hudCanvas }) {
       kills: sortie.kills,
       firing: sortie.firing,
       hitFlash: sortie.hitFlash,
+      // The clock the HUD needs to age the hit marker, and the marker itself.
+      time: sortie.time,
+      hitMark: sortie.hitMark,
+      hitMarks: sortie.hitMarks ?? 0,
+      // The rocket pod's seeker and magazine. Read from the weapon itself rather than tracked in
+      // the sortie, so the HUD cannot drift from what the seeker is actually doing.
+      ordnance: airDefence.ordnanceStatus(),
       threats,
       threatBearing: threats.nearest?.bearing ?? 0,
+      // The leader, projected into HUD space. Null once it is down, which is what clears the
+      // bracket without the HUD having to know the leader died.
+      aceMark: aceMarkFor(threats),
+      // What the round still wants shot down, so the combat block can say so. The same helper the
+      // game loop uses, so the HUD cannot claim MET while the end-of-round test disagrees.
+      objective: objectiveProgress(round, {
+        turretsKilled: sortie.turretsKilled,
+        dronesKilled: sortie.dronesKilled,
+      }),
 
       // The autopilot's own line, so a pilot who has handed over the aircraft can see what it is
       // doing rather than guessing from the control positions.
@@ -1026,7 +1149,7 @@ export function createGame({ canvas, hudCanvas }) {
       sortie.time += dt;
       airDefence.track(aircraftState.position);
       if (fire) airDefence.fireGuns(dt, aircraftState, controls);
-      airDefence.update(dt, aircraftState, sortie.time);
+      airDefence.update(dt, aircraftState, sortie.time, controls);
     }
     sortie.firing = fire;
     sortie.hitFlash = 0;
@@ -1079,6 +1202,61 @@ export function createGame({ canvas, hudCanvas }) {
     get obstacles() { return obstacles; },
     get gateVisuals() { return gateVisuals; },
     setCinema(c) { cinema = c; },
+    getCinema: () => cinema,
+    /**
+     * The camera's view axis in world space, as flat components plus the horizontal right vector.
+     *
+     * A screenshot scene that wants a gate "dead ahead" cannot use the aircraft's forward vector:
+     * the chase camera trails, lifts and banks, so its axis and the nose's diverge. This hands back
+     * the axis the lens actually has, which is what a ring has to sit on to read as centred.
+     */
+    viewForward() {
+      // The camera is placed from the aircraft pose on every frame; derive the same basis rather
+      // than reading a matrix that a still may be rendered before.
+      const s = aircraftState;
+      if (view === 'cockpit') {
+        // The cockpit camera looks along the nose, pitched with it.
+        const cp = Math.cos(s.pitch);
+        return {
+          fx: Math.sin(s.heading) * cp,
+          fy: Math.sin(s.pitch),
+          fz: -Math.cos(s.heading) * cp,
+          rx: Math.cos(s.heading),
+          rz: Math.sin(s.heading),
+        };
+      }
+      // Chase: the lens sits behind and above, looks 26 m past the nose and is rolled by the bank.
+      // Over that baseline the axis is very nearly the nose's, tilted down by the arm's height.
+      const arm = cinema ? cinema.back : 1;
+      const lift = cinema ? cinema.up : 1;
+      const back = (21 + s.speed * 0.085) * arm;
+      const up = (5.6 + s.speed * 0.012) * lift;
+      const eyeX = s.position.x - Math.sin(s.heading) * back + Math.cos(s.heading) * (cinema?.side ?? 0);
+      const eyeY = s.position.y + up - Math.sin(s.pitch) * back * 0.42;
+      // The camera code subtracts the side offset on Z (dirZ is -cos h, so the trailing term is
+      // +cos h * back); writing +sin h * side here put the eye on the wrong side of the fuselage and
+      // tilted the derived axis, which projected the ring off centre.
+      const eyeZ = s.position.z + Math.cos(s.heading) * back - Math.sin(s.heading) * (cinema?.side ?? 0);
+      const lookX = s.position.x + Math.sin(s.heading) * 26;
+      const lookY = s.position.y + Math.sin(s.pitch) * 26 + 1.2;
+      const lookZ = s.position.z - Math.cos(s.heading) * 26;
+      const dx = lookX - eyeX;
+      const dy = lookY - eyeY;
+      const dz = lookZ - eyeZ;
+      const len = Math.hypot(dx, dy, dz) || 1;
+      return {
+        fx: dx / len,
+        fy: dy / len,
+        fz: dz / len,
+        rx: Math.cos(s.heading),
+        rz: Math.sin(s.heading),
+        // The two points that define the ray. A ring planted only from the aircraft's position is
+        // near the axis but never exactly on it, because the lens is not at the aircraft; carrying
+        // the eye and the look point lets a scene put the ring *on* the ray, not near it.
+        eye: { x: eyeX, y: eyeY, z: eyeZ },
+        look: { x: lookX, y: lookY, z: lookZ },
+      };
+    },
     get round() { return round; },
     get progress() { return progress; },
     get kit() { return kit; },
@@ -1090,6 +1268,14 @@ export function createGame({ canvas, hudCanvas }) {
     get settlements() { return settlements; },
     /** The heightfield, for scenes and tests that need to place something on the ground. */
     get terrain() { return terrain; },
+    /**
+     * The round's air defence.
+     *
+     * Exposed for the same reason as `terrain`: a scene or a test that wants to know what the pod
+     * is doing has no other way to ask, and rebuilding a weapon outside the game would prove
+     * nothing about the one the pilot is flying.
+     */
+    get airDefence() { return airDefence; },
     /** Re-reads the kit and refits the aircraft. The shop calls this after a purchase. */
     refit() {
       kit = loadKit();

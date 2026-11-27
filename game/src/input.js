@@ -87,6 +87,9 @@ export function createInput(canvas) {
     // primary and Z is the backup, because on some layouts X sits under the same finger as the
     // throttle and cannot be held comfortably.
     controls.fire = keys.has('KeyX') || keys.has('KeyZ');
+    // The rocket pod releases on a press, not a hold: C is the primary and N the backup, chosen so
+    // neither sits under the hand that is holding the trigger or the throttle.
+    controls.launch = keys.has('KeyC') || keys.has('KeyN');
 
     controls.mouseDeltaX = state.mouseDX;
     controls.mouseDeltaY = state.mouseDY;

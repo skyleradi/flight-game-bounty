@@ -163,6 +163,54 @@ export const ENEMY = {
   },
   /** Points for a kill, before the round's difficulty scales it. */
   killScore: 60,
+  /**
+   * What a flight leader is worth on top of its own kill.
+   *
+   * A leader flies tighter, leads its shots better and shoots at longer range, so downing one is a
+   * different class of flying from downing a wingman. Paying the same for both would tell the
+   * pilot the distinction the livery makes does not exist.
+   */
+  aceBonus: 3.0,
+};
+
+/**
+ * The rocket pod: the aircraft's second weapon.
+ *
+ * The guns are a strafing tool — short range, small damage per round, and the pilot has to hold
+ * the nose on the target while the rounds fly. The pod is the answer to the two situations the
+ * guns cannot solve: a gun emplacement that has the aircraft in its cone, and an interceptor that
+ * is turning inside the aircraft's turn circle. Both need a shot that does not require holding
+ * still, which is what a guided round buys.
+ *
+ * The lock is deliberately slow and deliberately narrow. A lock that comes easily is a lock the
+ * pilot never has to fly for, and the point of the weapon is the approach: get the nose inside the
+ * cone, hold it there while the seeker settles, and the shot is yours.
+ */
+export const ORDNANCE = {
+  /** Rounds carried. Four is two passes at two targets. */
+  count: 4,
+  /** Seconds the nose must stay inside the cone before the seeker has a solution. */
+  lockTime: 1.15,
+  /** Half-angle of the lock cone, radians. Roughly eight degrees. */
+  coneAngle: 0.14,
+  /** Maximum range at which a lock can be had, metres. */
+  lockRange: 1500,
+  /** Beyond this the seeker loses what it was tracking, so a lock has to be launched on. */
+  loseRange: 1900,
+  /** Metres a second at launch; the motor burns for `burn` seconds and then it coasts. */
+  speed: 260,
+  burn: 2.4,
+  /** How hard the round can turn, radians a second. A hard break beats it; a straight run does not. */
+  turnRate: 2.5,
+  /** Damage on arrival. Enough to take a turret or an interceptor in one. */
+  damage: 120,
+  /** Seconds of flight before the motor gives out and the round falls away. */
+  life: 7,
+  /**
+   * How far the seeker looks for its target each step, metres. Too small and the round tunnels
+   * past a fast target between steps; too large and it turns onto something it never saw.
+   */
+  seekRadius: 45,
 };
 
 /**
@@ -295,7 +343,9 @@ export const CAMPAIGN = [
     hour: 15.6,
     /** A single flak site on the ridge, so the pilot meets ground fire with room to avoid it. */
     airDefence: { flak: 2, drones: 0 },
-    objective: 'Seven gates with a nine-metre crosswind. Land it straight.',
+    /** One gun, and only one: the first taste of ground fire should not be a course requirement. */
+    winCondition: { flak: 1, drones: 0 },
+    objective: 'Seven gates with a nine-metre crosswind. Strafe the ridge gun. Land it straight.',
     debrief: 'You flew the crab instead of fighting it. That is the whole trick.',
     sky: {
       top: '#164d8f', mid: '#3f7cb8', low: '#95bdd8', horizon: '#dfeaef',
@@ -330,7 +380,15 @@ export const CAMPAIGN = [
     difficulty: 1.3,
     hour: 11.2,
     airDefence: { flak: 3, drones: 1 },
-    objective: 'Eight gates, most of them inside cloud. Climb to the tops.',
+    /**
+     * One gun tower has to come down.
+     *
+     * Deliberately a turret and not the interceptor: a static gun sits on a ridge and can be found
+     * and strafed, while a drone in five kilometres of visibility is a target the pilot may never
+     * see. A requirement the pilot cannot satisfy is not difficulty, it is a stuck round.
+     */
+    winCondition: { flak: 1, drones: 0 },
+    objective: 'Eight gates, most of them inside cloud. Silence the ridge gun.',
     debrief: 'Instrument flying with a stick and a gate. Neatly done.',
     sky: {
       top: '#55677a', mid: '#7d90a0', low: '#a6b5c0', horizon: '#d4dce1',
@@ -366,7 +424,16 @@ export const CAMPAIGN = [
     hour: 18.9,
     /** The gorge is a shooting gallery: guns on the rims and drones running the floor. */
     airDefence: { flak: 4, drones: 2 },
-    objective: 'Eight gates down in the gorge. Low, fast, precise.',
+    /**
+     * Two of the four rim guns have to come down before the course counts as flown.
+     *
+     * The gorge is the one round whose terrain already asks the pilot to fly low and slow through
+     * a slot; putting two guns on the rim turns that slot into a decision — run it clean and take
+     * the fire, or spend a pass and a burst of afterburner to silence the guns first. Either answer
+     * is flying, which is the point.
+     */
+    winCondition: { flak: 2, drones: 0 },
+    objective: 'Silence two rim guns, then eight gates down in the gorge.',
     debrief: 'That is the run the old hands talk about. Except they did it slower.',
     sky: {
       // Hard midday: the sun is high and the air is thin, so the rock walls get a bright face and
@@ -415,7 +482,12 @@ export const CAMPAIGN = [
     difficulty: 1.9,
     hour: 21.6,
     airDefence: { flak: 5, drones: 3 },
-    objective: 'Ten gates in a gale, then a crosswind landing in the rain.',
+    /**
+     * The campaign's last sortie asks for the whole aeroplane: a gun line to break and an
+     * interceptor flight to survive, with the gates flown through the middle of it.
+     */
+    winCondition: { flak: 3, drones: 2 },
+    objective: 'Break three guns and two interceptors, fly ten gates, land in the gale.',
     debrief: 'Storm front, ten gates, and a landing in one piece. That is the campaign.',
     sky: {
       top: '#28323d', mid: '#44515c', low: '#69767e', horizon: '#95a0a6',

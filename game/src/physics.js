@@ -32,6 +32,8 @@ export function emptyControls() {
     boost: false,
     /** True for the one frame the gun trigger was pulled. */
     fire: false,
+    /** True for the one frame the rocket release was pressed. */
+    launch: false,
     mouseDeltaX: 0,
     mouseDeltaY: 0,
   };

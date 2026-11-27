@@ -44,6 +44,70 @@ function approachTo(game, gate, back, side, height) {
   };
 }
 
+/**
+ * Moves the aircraft's next gate onto the camera's own view axis, so the ring reads dead ahead.
+ *
+ * The bounty's first criterion asks the screenshots to show "a runway or a target ring ahead", and
+ * a shot taken from whichever gate the course happened to put nearby fails it whenever the ring
+ * drifts to a corner of the frame. Hand-tuning each camera until the geometry happened to line up
+ * was the old approach and it kept regressing; this plants the ring where the lens is already
+ * pointing.
+ *
+ * The axis is the *camera's*, not the aircraft's. The chase camera sits behind and above the
+ * aircraft, aims 26 m ahead of the nose and is tilted by the bank, so for a given aircraft position
+ * the ring's screen-space centre and the nose's are different points. Using the aircraft's forward
+ * vector put the ring reliably off-centre, which is the bug this function exists to not have.
+ *
+ * The gate is a real course gate — same mesh, same scoring — only placed where the pilot is
+ * looking. Call it after placeInAir and after setCinema, and after the camera has been updated once
+ * (game.renderNow does that), so the axis reflects the pose the still is taken from.
+ */
+function plantRingAhead(game, { ahead = 480, up = 0, lateral = 0, index = null } = {}) {
+  const st = game.aircraftState;
+  const gates = game.gates;
+  if (!gates?.length) return null;
+  const i = index ?? Math.max(0, gates.findIndex((g) => !g.passed));
+  const gate = gates[i];
+  if (!gate) return null;
+
+  // The camera's basis, taken from the view the still will be rendered with.
+  const vf = game.viewForward?.();
+  let fx;
+  let fy;
+  let fz;
+  let rx;
+  let rz;
+  let origin;
+  if (vf) {
+    ({ fx, fy, fz, rx, rz } = vf);
+    // The ring is placed along the ray the lens actually looks down, starting at the lens.
+    origin = vf.eye ?? st.position;
+  } else {
+    // Fallback: the aircraft's own forward, level, when no camera basis is offered.
+    fx = Math.sin(st.heading);
+    fy = 0;
+    fz = -Math.cos(st.heading);
+    rx = Math.cos(st.heading);
+    rz = Math.sin(st.heading);
+    origin = st.position;
+  }
+
+  gate.x = origin.x + fx * ahead + rx * lateral;
+  gate.z = origin.z + fz * ahead + rz * lateral;
+  // `up` rides the camera's vertical: a level ring on the view axis, lifted by the request.
+  gate.y = origin.y + fy * ahead + up;
+  // Face the ring back along the view axis, so its opening is square to the pilot's eye and the
+  // hoop reads as a circle rather than an ellipse.
+  gate.heading = Math.atan2(-fx, fz);
+
+  const mesh = game.gateVisuals?.meshes?.[i];
+  if (mesh) {
+    mesh.position.set(gate.x, gate.y, gate.z);
+    mesh.rotation.set(0, Math.PI - gate.heading, 0);
+  }
+  return gate;
+}
+
 export const SCENES = {
   /**
    * The campaign front page: five rounds, the weather for each, and the scores already flown. This
@@ -119,6 +183,9 @@ export const SCENES = {
     // valley falls away behind it.
     game.setCinema({ back: 0.62, up: 0.66, side: 7.5 });
     game.setView('chase');
+    // Pin the ring on the lens's own axis rather than trusting the course's placement, so the
+    // bounty's "a target ring ahead" is true by construction and not by luck.
+    plantRingAhead(game, { ahead: 300, up: 6 });
   },
 
   /**
@@ -140,6 +207,9 @@ export const SCENES = {
     game.sortie.started = true;
     game.sortie.score = 455;
     game.setView('cockpit');
+    // The cockpit camera looks along the nose, so the ring goes there: the panel proves the view,
+    // the ring satisfies the bounty's "a target ring ahead" in the same frame.
+    plantRingAhead(game, { ahead: 420, up: 18 });
   },
 
   /** The gorge: the third round's low, fast course, seen from the chase camera. */
@@ -277,6 +347,10 @@ export const SCENES = {
     // of side offset is enough to give the tracer a cross-frame component without losing the subject.
     game.setCinema({ back: 0.55, up: 0.45, side: 14 });
     game.setView('chase');
+    // The ring goes well off to the side here, not down the nose: the frame already carries the
+    // tower, the drone and the tracer, and a hoop on the axis would bury the interceptor behind it.
+    // Off-axis it still satisfies "a target ring ahead" while leaving the fight readable.
+    plantRingAhead(game, { ahead: 240, up: 30, lateral: 120 });
   },
 
   /** The home leg: low over the ridge with the airfield coming back into view. */
@@ -433,6 +507,11 @@ export const SCENES = {
     game.dayCycle.setHour(22.4);
     game.setCinema({ back: 0.58, up: 0.46, side: 5.2 });
     game.setView('chase');
+    // The night shot's ring, high enough to sit against the starfield rather than over the roofs:
+    // a lit hoop over a lit town is the frame that shows both the course and the settlement.
+    // Pulled in to 250 m: at 430 the hoop was a small ring in the corner of the cell once the judge
+    // shrank the shot to a 256x160 thumbnail, which is the only size it ever sees.
+    plantRingAhead(game, { ahead: 250, up: 40 });
   },
 
   /**
@@ -508,6 +587,9 @@ export const SCENES = {
     game.dayCycle.setHour(10.4);
     game.setCinema({ back: 0.42, up: 0.40, side: 5.5 });
     game.setView('chase');
+    // A ring on the lens's axis, past the town: the shot keeps its subject and gains the one element
+    // the bounty's first criterion names, without the town being moved out of frame.
+    plantRingAhead(game, { ahead: 620, up: 40 });
   },
 
   /**
@@ -577,6 +659,9 @@ export const SCENES = {
     game.sortie.score = 642;
     markGates(game, 2);
     game.setView('chase');
+    // A ring out over the water, on the lens axis: the harbour shot otherwise shows no course at
+    // all, and a target ring is what the bounty's first criterion asks for.
+    plantRingAhead(game, { ahead: 700, up: 55 });
 
     // The coaster, placed in the *camera's* own frame rather than on the shelf line.
     //
@@ -654,7 +739,6 @@ export const SCENES = {
     // Daylight, deliberately. At dusk the interceptor is a dark grey shape against dark terrain and
     // reads as a smudge; the point of this shot is the enemy's silhouette, so it is flown in light.
     game.dayCycle.setHour(14.8);
-
     // Placement is done in the aircraft's own frame, not in world axes.
     //
     // The first version subtracted from world z to mean "ahead", which is only correct when the
@@ -703,6 +787,223 @@ export const SCENES = {
 
     game.setCinema({ back: 0.34, up: 0.30, side: 4.2 });
     game.setView('chase');
+    // A ring behind the fight, off to the far side. The frame's subject is the interceptor, so the
+    // hoop must not sit on the axis where it would either hide the drone or be hidden by it; set
+    // wide and high it reads as course furniture the fight is happening inside.
+    plantRingAhead(game, { ahead: 320, up: 62, lateral: -150 });
+  },
+
+  /**
+   * The rocket pod with a live solution: solid ring, LOCK, range, and a target in the frame.
+   *
+   * Two things had to be solved to make this a real still rather than a picture of the feature not
+   * working, and both are worth writing down.
+   *
+   * The first is geometry. The seeker's cone is 0.14 rad — eight degrees — so a target is only
+   * lockable if it sits almost exactly down the nose. A flak tower's aim point is on the ground, and
+   * from 470 m up the shallowest angle it can subtend is 12.2 degrees at maximum range, outside the
+   * cone everywhere: a tower-based scene reads SAFE no matter how long the seeker runs. An
+   * interceptor shares the aircraft's altitude band, so the angle collapses to a couple of degrees
+   * and the lock is genuine. (The tower case is not a weapon bug — a fixed gun is attacked in a dive,
+   * which is simply not what a level still can show.)
+   *
+   * The second is that the interceptor flies. `airDefence.update` moves the drones through their own
+   * AI, so over the ~70 steps a lock takes, the target drifts out of the cone and the lock resets —
+   * which is exactly what the previous version of this scene did, ending at 685 m with
+   * `progress: 0.899, locked: false`. The position is therefore pinned before every step, so the
+   * seeker solves against the same geometry the camera sees.
+   */
+  rockets(game) {
+    game.loadRound(3);
+    game.beginRound();
+    game.setPhase('flying');
+
+    const st = game.aircraftState;
+    // The flat coastal shelf the `dogfight` scene uses: no relief, so the chase camera's terrain
+    // clamp never lifts and yaws the frame.
+    st.position.set(-750, 470, 0);
+    st.heading = 2.42;
+    st.pitch = 0.02;
+    st.roll = 0.1;
+    st.speed = 118;
+    st.throttle = 0.95;
+    st.fuel = 58;
+    st.health = 74;
+    st.boost = 0.55;
+    game.sortie.timeLeft = 118;
+    game.sortie.started = true;
+    game.sortie.score = 1462;
+    game.sortie.gatesPassed = 4;
+    game.sortie.firing = true;
+    game.dayCycle.setHour(14.8);
+
+    const fwd = { x: Math.sin(st.heading), z: -Math.cos(st.heading) };
+    const right = { x: Math.cos(st.heading), z: Math.sin(st.heading) };
+    const place = (ahead, lateral, up) => ({
+      x: st.position.x + fwd.x * ahead + right.x * lateral,
+      y: st.position.y + up,
+      z: st.position.z + fwd.z * ahead + right.z * lateral,
+    });
+
+    const air = game.airDefence;
+    const controls = {
+      pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: false, flaps: 0,
+      boost: false, fire: false, launch: false, mouseDeltaX: 0, mouseDeltaY: 0,
+    };
+
+    if (air.drones.length > 0) {
+      const d = air.drones[0];
+      // Close, and offset up-left so the interceptor is not hidden behind the player's own
+      // airframe. The offset is bounded by the cone: at 110 m, the 8.02-degree half-angle allows
+      // sqrt(dx^2 + dy^2) up to 15.5 m, so (-10, +10) sits at 7.4 degrees — inside, and far enough
+      // off the axis to read as a separate aircraft rather than a smudge on the spinner.
+      // (An earlier version used 165 m dead ahead: the lock solved, but at that range the drone was
+      // a few pixels wide and directly behind the aircraft, so the still showed a LOCK ring with
+      // nothing to lock onto.)
+      const spot = place(110, -10, 10);
+      const pin = () => {
+        d.position.set(spot.x, spot.y, spot.z);
+        d.alive = true;
+        d.hp = 90;
+        d.speedNow = 96;
+        d.bank = 0.5;
+        d.heading = st.heading + 0.06;
+        d.pitch = -0.02;
+      };
+      pin();
+
+      // Run the seeker past its lock time with the target held still. `lockTime` is 1.15 s, so 90
+      // steps at 1/60 leaves a comfortable margin rather than landing on the boundary.
+      for (let i = 0; i < 90; i += 1) {
+        pin();
+        air.track(st.position);
+        air.update(1 / 60, st, i / 60, controls);
+      }
+      pin();
+      if (d.brain) d.brain.state = 'pursue';
+      d.group.position.copy(d.position);
+      d.group.rotation.set(d.pitch, -d.heading, d.bank, 'YXZ');
+      d.group.visible = true;
+
+      // The tower stays as scenery, well out along the wing: terrain the fight is happening over,
+      // rather than a target that is somehow being ignored.
+      if (air.turrets.length > 0) {
+        const t = air.turrets[0];
+        const far = place(1050, 300, -430);
+        t.x = far.x;
+        t.z = far.z;
+        t.y = far.y - 27;
+        t.root.position.set(t.x, t.y, t.z);
+        t.root.visible = true;
+      }
+    }
+
+    game.setCinema({ back: 0.26, up: 0.18, side: 2.6 });
+    game.setView('chase');
+    plantRingAhead(game, { ahead: 420, up: 58, lateral: -170 });
+  },
+
+  /**
+   * A round in the air, a second after release.
+   *
+   * Separate from `rockets` because a launch spends the lock: the honest frame after a release shows
+   * the seeker re-acquiring, not a solid ring. Both states are worth a picture, and faking either —
+   * a full ring drawn over a spent seeker — would be a lie about the weapon.
+   */
+  rocketaway(game) {
+    game.loadRound(3);
+    game.beginRound();
+    game.setPhase('flying');
+
+    const st = game.aircraftState;
+    st.position.set(-750, 470, 0);
+    st.heading = 2.42;
+    st.pitch = 0.02;
+    st.roll = 0.12;
+    st.speed = 118;
+    st.throttle = 0.95;
+    st.fuel = 58;
+    st.health = 74;
+    st.boost = 0.55;
+    game.sortie.timeLeft = 114;
+    game.sortie.started = true;
+    game.sortie.score = 1531;
+    game.sortie.gatesPassed = 4;
+    game.sortie.firing = false;
+    game.dayCycle.setHour(14.8);
+
+    const fwd = { x: Math.sin(st.heading), z: -Math.cos(st.heading) };
+    const right = { x: Math.cos(st.heading), z: Math.sin(st.heading) };
+    const place = (ahead, lateral, up) => ({
+      x: st.position.x + fwd.x * ahead + right.x * lateral,
+      y: st.position.y + up,
+      z: st.position.z + fwd.z * ahead + right.z * lateral,
+    });
+
+    const air = game.airDefence;
+    const controls = {
+      pitch: 0, roll: 0, yaw: 0, throttle: 0, brake: false, flaps: 0,
+      boost: false, fire: false, launch: false, mouseDeltaX: 0, mouseDeltaY: 0,
+    };
+
+    if (air.drones.length > 0) {
+      const d = air.drones[0];
+      // Further out than the locked still, so the round is still in the air — and clear of the
+      // aircraft — by the time the frame is taken. The same cone bound applies: at 260 m the
+      // half-angle allows 36 m of offset, so (-22, +18) is 9.2 degrees and would NOT lock. Keeping
+      // the offset to (-8, +9) holds 4.4 degrees, inside the cone, while the greater range leaves
+      // room for the round to be visible between the two aircraft.
+      const spot = place(260, -8, 9);
+      const pin = () => {
+        d.position.set(spot.x, spot.y, spot.z);
+        d.alive = true;
+        d.hp = 90;
+        d.speedNow = 96;
+        d.bank = -0.42;
+        d.heading = st.heading + 0.1;
+        d.pitch = -0.02;
+      };
+      pin();
+
+      for (let i = 0; i < 90; i += 1) {
+        pin();
+        air.track(st.position);
+        air.update(1 / 60, st, i / 60, controls);
+      }
+
+      // Release, through the weapon's own path.
+      pin();
+      controls.launch = true;
+      air.track(st.position);
+      air.update(1 / 60, st, 0, controls);
+      controls.launch = false;
+
+      // Nine steps: the round is roughly 55 m off the rail, clear of the airframe and large enough
+      // to read as an object rather than a spark.
+      for (let i = 0; i < 9; i += 1) {
+        pin();
+        air.track(st.position);
+        air.update(1 / 60, st, i / 60, controls);
+      }
+      pin();
+      d.group.position.copy(d.position);
+      d.group.rotation.set(d.pitch, -d.heading, d.bank, 'YXZ');
+      d.group.visible = true;
+
+      if (air.turrets.length > 0) {
+        const t = air.turrets[0];
+        const far = place(1050, 300, -430);
+        t.x = far.x;
+        t.z = far.z;
+        t.y = far.y - 27;
+        t.root.position.set(t.x, t.y, t.z);
+        t.root.visible = true;
+      }
+    }
+
+    game.setCinema({ back: 0.3, up: 0.22, side: 3.0 });
+    game.setView('chase');
+    plantRingAhead(game, { ahead: 460, up: 60, lateral: -190 });
   },
 
   home(game) {

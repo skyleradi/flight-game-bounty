@@ -13,7 +13,7 @@
  * Outside the grader's container MAKEFUN_OUTPUT_DIR stands in for /output.
  */
 
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { extname, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
@@ -142,6 +142,16 @@ if (gameBytes > GATE.game_max_bytes) {
 }
 
 mkdirSync(OUT, { recursive: true });
+// Clear the two directories this program owns before copying into them.
+//
+// `cpSync` merges, it does not replace: a screenshot left over from a previous build stays in the
+// output and is counted by the scorer, so the second build of the day fails with "holds 7 files,
+// over the 4 allowed" even though screenshots/ holds exactly four. The output directory belongs to
+// this program, so emptying it is the correct move — but only these two paths, never `OUT` itself,
+// because MAKEFUN_OUTPUT_DIR points at /output in the grader's container.
+for (const owned of ['game', 'screenshots']) {
+  rmSync(join(OUT, owned), { recursive: true, force: true });
+}
 cpSync(join(ROOT, 'game'), join(OUT, 'game'), { recursive: true });
 mkdirSync(join(OUT, 'screenshots'), { recursive: true });
 cpSync(join(ROOT, 'screenshots'), join(OUT, 'screenshots'), { recursive: true });

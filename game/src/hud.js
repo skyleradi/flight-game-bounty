@@ -83,16 +83,20 @@ export function createHud(canvas) {
     } else {
       drawEngineBlock(20, height - 146, d, scale);
       drawStatusBar(width - 190, height - 122, d, scale);
-      drawCombatBlock(width - 190, height - 122 - 70 * scale, d, scale);
+      drawCombatBlock(width - 190, height - 122 - 92 * scale, d, scale);
     }
     drawRoundStrip(20, cockpit ? 132 : 20, d, scale);
     drawAutopilotStrip(20, cockpit ? 190 : 78, d, scale);
     drawSalvageMarker(cx, cy, d, scale);
     drawThreatWarning(cx, cy, d, scale);
+    drawAceBracket(d);
     drawDamageVignette(d);
 
     drawGateIndicator(cx, dialY - r - (cockpit ? 30 : 44), d, scale * (cockpit ? 0.9 : 1));
-    drawCrosshair(cx, cy * (cockpit ? 0.86 : 0.72));
+    drawCrosshair(cx, cy * (cockpit ? 0.86 : 0.72), d);
+    // The marker sits on the reticle the rounds actually converge on, which is the crosshair, not
+    // the screen's centre in the cockpit view where the panel takes the bottom half.
+    drawHitMarker(cx, cy * (cockpit ? 0.86 : 0.72), d, scale);
 
     if (d.stall) {
       text('STALL', cx, dialY - r - (cockpit ? 12 : 24), 20, 'center', 'rgba(255, 96, 72, 0.96)', 700);
@@ -528,7 +532,7 @@ export function createHud(canvas) {
    * both harder to read at a glance.
    */
   function drawCombatBlock(x, y, d, scale = 1) {
-    const w = 170 * scale, h = 62 * scale;
+    const w = 170 * scale, h = 84 * scale;
     panel(x, y, w, h, 0.5);
 
     const air = d.threats ?? null;
@@ -558,10 +562,57 @@ export function createHud(canvas) {
     text(String(d.kills ?? 0), x + w - 12, y + 38, 13, 'right',
       (d.kills ?? 0) > 0 ? 'rgba(255, 226, 150, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
 
-    // The gun: cold while it is not being asked to fire, hot while it is.
+    // The gun: cold while it is not being asked to fire, hot while it is, and — the part that
+    // makes it a readout rather than a label — a rate bar that stutters with the actual cadence,
+    // so the pilot can see the gun is cycling and not jammed.
     text('GUNS', x + 12, y + 52, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
-    text(d.firing ? 'FIRING' : 'SAFE', x + w - 12, y + 52, 9.5, 'right',
-      d.firing ? 'rgba(255, 224, 130, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
+    const firing = !!d.firing;
+    text(firing ? 'FIRING' : 'SAFE', x + w - 12, y + 52, 9.5, 'right',
+      firing ? 'rgba(255, 224, 130, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
+    if (firing) {
+      // A two-pixel bar under the row, lit for the fraction of the cycle the gun is actually
+      // throwing rounds. It is the closest a canvas HUD gets to the mechanical feel of a trigger.
+      const cycle = (d.time ?? 0) % 0.075;
+      const lit = 1 - cycle / 0.075;
+      ctx.fillStyle = `rgba(255, 214, 120, ${0.35 + 0.55 * lit})`;
+      ctx.fillRect(x + 12, y + 58, (w - 24) * lit, 2);
+    }
+
+    // The mission requirement. This line is what tells the pilot the guns are the job rather than
+    // the scenery: without it a round that needs two towers down looks identical to one that does
+    // not, and the only way to find out is to land and be refused.
+    if (d.objective?.required) {
+      const o = d.objective;
+      const done = o.flakDone + o.droneDone;
+      const need = o.flakNeed + o.droneNeed;
+      text('OBJECTIVE', x + 12, y + 68, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+      text(o.met ? 'MET' : `${done}/${need}`, x + w - 12, y + 68, 10.5, 'right',
+        o.met ? 'rgba(130, 235, 195, 0.98)' : 'rgba(255, 176, 110, 0.98)', 700);
+    }
+
+    // The rocket pod. The ring around the reticle is the seeker settling; the row here is the
+    // magazine. Both are needed: a pilot who can see the lock but not the count fires the last
+    // round at nothing, and one who can see the count but not the lock never fires at all.
+    if (d.ordnance) {
+      const o = d.ordnance;
+      const label = o.empty ? 'EMPTY' : o.locked ? 'LOCKED' : o.hasTarget ? 'SEEKING' : 'SAFE';
+      const colour = o.empty ? 'rgba(150, 190, 210, 0.55)'
+        : o.locked ? 'rgba(255, 120, 96, 1)'
+          : o.hasTarget ? 'rgba(255, 214, 120, 1)' : 'rgba(150, 190, 210, 0.75)';
+      text('ROCKETS', x + 12, y + 82, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+      text(label, x + w - 12, y + 82, 9.5, 'right', colour, 700);
+
+      // One pip per round the pod was built with: live ones in the seeker's colour, spent ones
+      // hollow. The total is the pod's own complement, so the row does not shrink as rounds go.
+      const total = Math.max(1, Math.min(8, d.ordnance.count ?? 4));
+      const pips = Math.max(0, Math.min(total, o.remaining ?? 0));
+      const pipGap = 3;
+      const pipW = Math.min(9, (w - 24 - pipGap * (total - 1)) / total);
+      for (let i = 0; i < total; i += 1) {
+        ctx.fillStyle = i < pips ? colour : 'rgba(120, 160, 180, 0.22)';
+        ctx.fillRect(x + 12 + i * (pipW + pipGap), y + 88, pipW, 4);
+      }
+    }
   }
 
   /** Which way and how far to the next gate: an arrow around the compass rose. */
@@ -617,7 +668,7 @@ export function createHud(canvas) {
 
   /** A one-line combat readout for the cockpit view, under the status block. */
   function drawCompactCombat(x, y, d, scale = 1) {
-    const w = 140 * scale, h = 34 * scale;
+    const w = 140 * scale, h = 48 * scale;
     panel(x, y, w, h, 0.52);
     const air = d.threats ?? null;
     const alive = air ? air.turretsAlive + air.dronesAlive : 0;
@@ -627,6 +678,14 @@ export function createHud(canvas) {
     text('KILLS', x + 10, y + 25, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
     text(String(d.kills ?? 0), x + w - 10, y + 25, 10, 'right',
       (d.kills ?? 0) > 0 ? 'rgba(255, 226, 150, 1)' : 'rgba(150, 190, 210, 0.75)', 700);
+    // The cockpit block is the chase block compressed, so the objective line rides along: the
+    // requirement must not vanish just because the pilot changed camera.
+    if (d.objective?.required) {
+      const o = d.objective;
+      text('OBJ', x + 10, y + 39, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
+      text(o.met ? 'MET' : `${o.flakDone + o.droneDone}/${o.flakNeed + o.droneNeed}`, x + w - 10, y + 39, 9.5,
+        'right', o.met ? 'rgba(130, 235, 195, 0.98)' : 'rgba(255, 176, 110, 0.98)', 700);
+    }
   }
 
   /**
@@ -669,6 +728,43 @@ export function createHud(canvas) {
   }
 
   /**
+   * A bracket on the flight leader, when it is on screen.
+   *
+   * The livery says "this one is different" only once the pilot is close enough to read the shape.
+   * A bracket says it from a kilometre out, which is the range at which the choice — press the
+   * leader or clear the wingmen first — is actually made. Drawn in the world's perspective rather
+   * than as a fixed reticle, so it tracks the machine it belongs to.
+   */
+  function drawAceBracket(d) {
+    const ace = d.aceMark;
+    if (!ace || !ace.onScreen) return;
+    const x = ace.x;
+    const y = ace.y;
+    // The bracket's size follows the range: a distant leader gets a small mark, a close one a
+    // large one, so the cue does not read as a fixed piece of the cockpit.
+    const s = Math.max(9, Math.min(34, ace.scale));
+    const arm = s * 0.45;
+    const hot = ace.distance < 700;
+
+    ctx.save();
+    ctx.strokeStyle = hot ? 'rgba(255, 92, 60, 0.96)' : 'rgba(255, 148, 90, 0.9)';
+    ctx.lineWidth = 1.6;
+    // Four corner brackets, not a closed box: a closed box reads as a target the game has already
+    // selected, and this is a warning, not a lock.
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      ctx.beginPath();
+      ctx.moveTo(x + dx * s, y + dy * s - dy * arm);
+      ctx.lineTo(x + dx * s, y + dy * s);
+      ctx.lineTo(x + dx * s - dx * arm, y + dy * s);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    text('LEADER', x, y - s - 8, 8.5, 'center', hot ? 'rgba(255, 120, 88, 0.98)' : 'rgba(255, 176, 128, 0.9)', 700);
+    text(`${(ace.distance / 1000).toFixed(1)} km`, x, y + s + 14, 8.5, 'center', 'rgba(255, 200, 160, 0.78)', 600);
+  }
+
+  /**
    * A red rim when the airframe is being hit, and a permanent thin one when it is badly damaged.
    * The vignette is the only feedback for damage that does not require reading a number.
    */
@@ -690,7 +786,7 @@ export function createHud(canvas) {
   }
 
   /** The fixed reticle at the view's centre. */
-  function drawCrosshair(cx, cy) {
+  function drawCrosshair(cx, cy, d = null) {
     ctx.save();
     ctx.strokeStyle = 'rgba(255, 232, 150, 0.5)';
     ctx.lineWidth = 1.4;
@@ -699,7 +795,126 @@ export function createHud(canvas) {
     ctx.moveTo(cx - 16, cy); ctx.lineTo(cx - 8, cy);
     ctx.moveTo(cx + 8, cy); ctx.lineTo(cx + 16, cy);
     ctx.stroke();
+
+    // The seeker's ring. A sweep that fills as the cone is held, then snaps solid when the solution
+    // is there. Without this the pod is a key that sometimes works: the pilot has no way to know the
+    // nose is nearly on the target, and the launch either fires or does not.
+    //
+    // The base circle is drawn whenever the pod has rounds, so the reticle reads as a weapon sight
+    // rather than three ticks — a ring that only appears late is a ring the pilot never learns.
+    const o = d?.ordnance;
+    if (o && !o.empty) {
+      const r = 26;
+      const start = -Math.PI / 2;
+      const progress = Math.max(0, Math.min(1, o.progress ?? 0));
+
+      ctx.lineWidth = 1.1;
+      ctx.strokeStyle = 'rgba(150, 200, 220, 0.28)';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      if (o.locked || o.hasTarget) {
+        // Solid and thick once solved, a filling arc while the seeker settles.
+        const sweep = o.locked ? Math.PI * 2 : Math.PI * 2 * progress;
+        ctx.lineWidth = o.locked ? 3.2 : 2.2;
+        ctx.strokeStyle = o.locked ? 'rgba(255, 84, 58, 0.98)' : 'rgba(255, 198, 92, 0.92)';
+        if (o.locked) {
+          // A locked ring gets a soft halo so it reads at a glance in a turn.
+          ctx.shadowColor = 'rgba(255, 80, 50, 0.95)';
+          ctx.shadowBlur = 10;
+        }
+        ctx.beginPath();
+        ctx.arc(cx, cy, r, start, start + sweep);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // Four tick marks at the cardinal points, so a locked ring reads as a sight and not as a
+        // gate hoop that happens to be nearby.
+        if (o.locked) {
+          ctx.lineWidth = 2.4;
+          ctx.strokeStyle = 'rgba(255, 84, 58, 0.98)';
+          for (let k = 0; k < 4; k += 1) {
+            const a = start + (k * Math.PI) / 2;
+            const ix = cx + Math.cos(a) * (r - 5);
+            const iy = cy + Math.sin(a) * (r - 5);
+            const ox = cx + Math.cos(a) * (r + 6);
+            const oy = cy + Math.sin(a) * (r + 6);
+            ctx.beginPath();
+            ctx.moveTo(ix, iy);
+            ctx.lineTo(ox, oy);
+            ctx.stroke();
+          }
+        }
+
+        // The word, under the ring, plus the range once solved. The colour matches the arc so the
+        // readout and the shape say the same thing at the same instant.
+        ctx.textAlign = 'center';
+        ctx.font = '700 10px ui-monospace, Menlo, Consolas, monospace';
+        if (o.locked) {
+          ctx.fillStyle = 'rgba(255, 120, 96, 0.98)';
+          ctx.fillText('LOCK', cx, cy + r + 14);
+          ctx.font = '600 9px ui-monospace, Menlo, Consolas, monospace';
+          ctx.fillStyle = 'rgba(255, 160, 140, 0.92)';
+          ctx.fillText(`${(o.range ?? 0).toFixed(0)} m`, cx, cy + r + 26);
+        } else if (o.hasTarget) {
+          ctx.fillStyle = 'rgba(255, 205, 110, 0.9)';
+          ctx.fillText(`${Math.round(progress * 100)}%`, cx, cy + r + 14);
+        }
+      }
+    }
     ctx.restore();
+  }
+
+  /**
+   * The hit marker: four ticks around the reticle that snap outward on impact, plus a floating
+   * damage number above it.
+   *
+   * The guns fire two rounds at a time at 13 rounds a second, so a burst can put a dozen hits into
+   * a turret before it falls. Without this the only evidence a burst is working is the target
+   * eventually exploding, which arrives too late to correct the aim that missed. The marker is
+   * timed off the impact rather than held for a frame, so a fast burst reads as a strobe and a
+   * single round reads as one clear tick.
+   */
+  function drawHitMarker(cx, cy, d, scale = 1) {
+    const mark = d.hitMark;
+    if (!mark) return;
+    const age = (d.time ?? 0) - mark.at;
+    // A kill stays up a little longer than a plain hit, because the last round of a burst is the
+    // one worth seeing.
+    const life = mark.killed ? 0.55 : 0.22;
+    if (age < 0 || age > life) return;
+    const k = Math.min(1, age / life);
+
+    // The ticks start on the reticle and fly out, fading as they go.
+    const r0 = 6 + k * 9;
+    const r1 = r0 + 7 * (1 - k * 0.45);
+    const alpha = (1 - k) * (mark.killed ? 1 : 0.9);
+    ctx.save();
+    ctx.strokeStyle = mark.killed
+      ? `rgba(255, 130, 70, ${alpha})`
+      : `rgba(255, 246, 210, ${alpha})`;
+    ctx.lineWidth = mark.killed ? 2.4 : 1.8;
+    for (const [dx, dy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+      ctx.beginPath();
+      ctx.moveTo(cx + dx * r0 * 0.72, cy + dy * r0 * 0.72);
+      ctx.lineTo(cx + dx * r1 * 0.72, cy + dy * r1 * 0.72);
+      ctx.stroke();
+    }
+    ctx.restore();
+
+    // The number rises and fades. Damage per round is small, so it is shown as a running figure
+    // only when it matters — on the round that killed — and as a bare tick otherwise.
+    if (mark.killed) {
+      const rise = 18 + k * 22;
+      const label = mark.ace ? 'LEADER DOWN' : mark.kind === 'turret' ? 'GUN DOWN' : 'DOWN';
+      text(label, cx, cy - rise, 12 * scale, 'center',
+        `rgba(255, 176, 110, ${(1 - k) * 0.98})`, 700);
+    } else {
+      const rise = 12 + k * 16;
+      text(`-${mark.damage}`, cx + 14, cy - rise, 10 * scale, 'left',
+        `rgba(255, 244, 206, ${(1 - k) * 0.85})`, 600);
+    }
   }
 
   function bar(x, y, w, h, value, colour) {

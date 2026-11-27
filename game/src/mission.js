@@ -11,7 +11,7 @@
 // run that hugs the rock, and a wide oval for the storm.
 
 import * as THREE from '../vendor/three.module.min.js';
-import { CAMPAIGN, MISSION, RUNWAY, PALETTE } from './config.js';
+import { CAMPAIGN, ENEMY, MISSION, RUNWAY, PALETTE } from './config.js';
 
 /**
  * A point on the course at a fraction of the way along, in the runway's frame.
@@ -233,6 +233,7 @@ export function gateBearing(gate, position) {
  */
 export function scoreRound({
   round, gatesPassed, landed, crashed, health, fuel, maxFuel, timeLeft, maxTime, kills = 0,
+  aceKills = 0,
 }) {
   const total = round.gates;
   const gatesPart = (gatesPassed / total) * 620;
@@ -242,8 +243,38 @@ export function scoreRound({
   const timePart = Math.max(0, Math.min(1, timeLeft / maxTime)) * 70;
   const raw = gatesPart + landingPart + healthPart + fuelPart + timePart;
   const base = Math.round(Math.min(1000, raw * round.difficulty));
-  const killBonus = Math.round(kills * 60 * round.difficulty);
+  // `kills` counts every machine; `aceKills` is how many of those were flight leaders, which pay
+  // the leader's rate instead of the wingman's. The two must be counted this way rather than by
+  // adding a second bonus on top, or a leader killed would be paid twice.
+  const wingmen = Math.max(0, kills - aceKills);
+  const killBonus = Math.round(
+    (wingmen + aceKills * (ENEMY.aceBonus ?? 1)) * ENEMY.killScore * round.difficulty,
+  );
   return base + killBonus;
+}
+
+/**
+ * What the round still wants shot down.
+ *
+ * The campaign's later sorties are not just courses: they ask for a gun line to be broken or an
+ * interceptor flight to be survived, and the gates do not count until that is done. Keeping the
+ * arithmetic here rather than in the game loop means the HUD, the end-of-round test and the
+ * briefing all read the same answer — the bug that made a round impossible to finish was three
+ * slightly different comparisons of the same two counts.
+ */
+export function objectiveProgress(round, { turretsKilled = 0, dronesKilled = 0 } = {}) {
+  const need = round.winCondition ?? { flak: 0, drones: 0 };
+  const flakNeed = need.flak ?? 0;
+  const droneNeed = need.drones ?? 0;
+  return {
+    flakNeed,
+    droneNeed,
+    flakDone: Math.min(turretsKilled, flakNeed),
+    droneDone: Math.min(dronesKilled, droneNeed),
+    /** False for a round that is flown with the guns cold, so the HUD can hide the line. */
+    required: flakNeed + droneNeed > 0,
+    met: turretsKilled >= flakNeed && dronesKilled >= droneNeed,
+  };
 }
 
 /** Writes the campaign's progress: which rounds are open, and the best score on each. */
@@ -272,7 +303,14 @@ export function saveProgress(progress) {
   }
 }
 
-/** Records a finished round, unlocking the next one when the pilot completed the course. */
+/**
+ * Records a finished round, unlocking the next one when the pilot completed the course.
+ *
+ * "Completed" is both halves: the gates flown and the round's kill requirement met. A result that
+ * predates the objective system has no `objectiveMet` field at all, so an absent key is read as
+ * satisfied — otherwise every save from the old build would lock the campaign behind a record it
+ * never had a chance to earn.
+ */
 export function recordRound(progress, roundIndex, result) {
   const next = {
     unlocked: progress.unlocked,
@@ -281,7 +319,9 @@ export function recordRound(progress, roundIndex, result) {
   };
   const previousBest = next.best[roundIndex] ?? 0;
   next.best[roundIndex] = Math.max(previousBest, result.score);
-  if (result.gatesPassed >= CAMPAIGN[roundIndex].gates && roundIndex + 1 > next.unlocked - 1) {
+  const objectiveDone = result.objectiveMet !== false;
+  if (result.gatesPassed >= CAMPAIGN[roundIndex].gates && objectiveDone
+    && roundIndex + 1 > next.unlocked - 1) {
     next.unlocked = Math.max(next.unlocked, Math.min(CAMPAIGN.length, roundIndex + 2));
   }
   next.total = Object.values(next.best).reduce((a, b) => a + b, 0);
