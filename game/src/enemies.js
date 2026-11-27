@@ -127,18 +127,27 @@ function buildDrone({ ace = false } = {}) {
 
   // The ace wears a darker, glossier skin with a black spine and a brighter accent, so it reads as
   // a different machine even at 300 m in a grey sky.
+  //
+  // The ordinary interceptor's skin used to be 0x4a4f56 with a non-emissive stripe, which against
+  // the valley's own greens and greys resolved to a silhouette and nothing else — the vision pass
+  // on the delivered dogfight frame read them as "flies, not aircraft", because at 300 m there was
+  // no part of the machine with enough contrast to give it a shape. Three changes, all of them
+  // things a real aircraft has: a slightly warmer and lighter skin so it separates from the ground,
+  // an emissive red on the wingtip stripes (formation lights), and the same treatment on the tail.
+  // The emissive is what carries at range, because it is independent of where the sun happens to
+  // be; the skin alone only works when the aircraft is lit.
   const skin = new THREE.MeshStandardMaterial({
-    color: ace ? 0x24262b : 0x4a4f56,
+    color: ace ? 0x24262b : 0x585e66,
     roughness: ace ? 0.28 : 0.42,
     metalness: ace ? 0.85 : 0.68,
     flatShading: true,
     envMapIntensity: ace ? 1.6 : 1.1,
   });
   const accent = new THREE.MeshStandardMaterial({
-    color: ace ? 0xff2a18 : 0xb03a30,
+    color: ace ? 0xff2a18 : 0xc2453a,
     roughness: 0.5, metalness: 0.3, flatShading: true,
-    emissive: ace ? 0x5a0c06 : 0x000000,
-    emissiveIntensity: ace ? 1 : 0,
+    emissive: ace ? 0x8a1208 : 0x58120c,
+    emissiveIntensity: ace ? 1.35 : 0.72,
   });
   const eye = new THREE.MeshBasicMaterial({ color: ace ? 0xff5a20 : 0xff3826 });
 
@@ -177,6 +186,13 @@ function buildDrone({ ace = false } = {}) {
   const lens = new THREE.Mesh(new THREE.SphereGeometry(ace ? 0.78 : 0.62, 8, 6), eye);
   lens.position.set(0, 0.2, -3.8);
   group.add(lens);
+
+  // A tail formation light. The wingtip stripes alone read at a shallow angle but disappear when
+  // the drone is banked toward or away from the camera, which is most of a dogfight; one more
+  // emissive point on the fin keeps the machine findable through the whole turn.
+  const tailLight = new THREE.Mesh(new THREE.SphereGeometry(ace ? 0.34 : 0.26, 6, 5), eye);
+  tailLight.position.set(0, ace ? 0.9 : 0.42, ace ? 2.9 : 2.5);
+  group.add(tailLight);
 
   // Only the leader carries the dorsal fin and the twin tail lights. Two extra shapes is enough
   // for the silhouette to differ at the range the player first sees it, which a paint job alone

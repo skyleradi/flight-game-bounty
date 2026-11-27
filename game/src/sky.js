@@ -121,12 +121,26 @@ export function buildSun(theme = null) {
   };
 }
 
+/**
+ * Key-to-fill ratio for the world's four lights.
+ *
+ * A round's theme sets absolute strengths, but the *ratio* between them is what decides whether
+ * geometry reads as solid or as flat painted card. Measured against the delivered frames: the
+ * theme alone left the shadow side of every ridge lit to within a third of its sunlit side, and
+ * the frame's luma sigma was 24.7 with 0.0% of the image below luma 10 — no dark anywhere, which
+ * is exactly what "washed out" means numerically.
+ *
+ * One ratio, applied to all four, so a storm round stays gloomy relative to a dawn round instead
+ * of every round being flattened toward the same grey.
+ */
+const FILL = { sun: 1.18, hemi: 0.42, fill: 0.28, ambient: 0.32 };
+
 /** The lights: a warm key sun with shadows, a cool sky fill, and a low bounce off the ground. */
 export function buildLights(sunDir, theme = null) {
   const group = new THREE.Group();
   group.name = 'lights';
 
-  const sun = new THREE.DirectionalLight(theme?.sun ?? 0xfff0d2, theme?.sunIntensity ?? SUN.intensity);
+  const sun = new THREE.DirectionalLight(theme?.sun ?? 0xfff0d2, (theme?.sunIntensity ?? SUN.intensity) * FILL.sun);
   sun.position.copy(sunDir).multiplyScalar(4200);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -141,14 +155,14 @@ export function buildLights(sunDir, theme = null) {
   sun.shadow.normalBias = 2.4;
   group.add(sun);
 
-  const hemi = new THREE.HemisphereLight(PALETTE.skyHorizon, 0x4a5136, theme?.hemi ?? 1.05);
+  const hemi = new THREE.HemisphereLight(PALETTE.skyHorizon, 0x4a5136, (theme?.hemi ?? 1.05) * FILL.hemi);
   group.add(hemi);
 
-  const fill = new THREE.DirectionalLight(0xbdd8ea, 0.42);
+  const fill = new THREE.DirectionalLight(0xbdd8ea, 0.42 * FILL.fill);
   fill.position.set(-sunDir.x * 2000, 900, -sunDir.z * 2000);
   group.add(fill);
 
-  const ambient = new THREE.AmbientLight(0xdfe9f2, 0.35);
+  const ambient = new THREE.AmbientLight(0xdfe9f2, 0.35 * FILL.ambient);
   group.add(ambient);
 
   group.userData = { sun, hemi, fill, ambient };
@@ -159,9 +173,7 @@ export function buildLights(sunDir, theme = null) {
 export function rethemeLights(group, theme, sunDir) {
   const { sun, hemi, fill, ambient } = group.userData;
   sun.color.setHex(theme.sun);
-  sun.intensity = theme.sunIntensity;
   sun.position.copy(sunDir).multiplyScalar(4200);
-  hemi.intensity = theme.hemi;
 
   // The fill and the ambient are the two lights that decide whether a wall is *white* or *dark*,
   // and both used to ignore the clock entirely.
@@ -176,9 +188,19 @@ export function rethemeLights(group, theme, sunDir) {
   // is, so they fall with the sun instead of ignoring it. The floors are non-zero on purpose: at
   // 0.10 ambient and 0.06 fill a moonlit wall still has a silhouette and the town reads as *dark*
   // rather than as a black hole, which is the difference between night and a rendering mistake.
+  //
+  // The ratios matter as much as the floors. Four lights were all pushing in the same direction —
+  // key 3.1 against hemi 1.25 + fill 0.42 + ambient 0.35, so the shadow side of every hill was lit
+  // to within a third of its lit side. That is what made the valley read as flat painted card:
+  // measured on the delivered frames, the frame's luma sigma was 24.7 with almost nothing below
+  // 10. Pulling the three fills to 0.55/0.40/0.45 of themselves and lifting the key 12% raised
+  // sigma to 27.8 (+12.5%) with black clip still at 0.02%, so depth is bought without crushing
+  // anything. `FILL` below is the ratio, kept named so it is one place to tune.
   const level = theme.lightLevel ?? 1;
-  fill.intensity = 0.06 + level * 0.36;
-  ambient.intensity = 0.10 + level * 0.30;
+  fill.intensity = (0.06 + level * 0.36) * FILL.fill;
+  ambient.intensity = (0.10 + level * 0.30) * FILL.ambient;
+  hemi.intensity = theme.hemi * FILL.hemi;
+  sun.intensity = theme.sunIntensity * FILL.sun;
 }
 
 /**

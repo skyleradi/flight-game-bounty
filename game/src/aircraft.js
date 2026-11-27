@@ -5,6 +5,7 @@
 import * as THREE from '../vendor/three.module.min.js';
 import { AIRCRAFT, PALETTE } from './config.js';
 import { buildFuselage, buildWingPanel } from './aircraft-shape.js';
+import { enhanceHullMaterial } from './aircraft-livery.js';
 
 /**
  * The flight model's own state lives beside the model: the renderer only reads it. Angles are
@@ -46,6 +47,12 @@ export function buildAircraft() {
   const hull = new THREE.MeshStandardMaterial({
     color: PALETTE.hull, roughness: 0.34, metalness: 0.52, envMapIntensity: 1.15,
   });
+  // The livery's seams and staining are keyed off the fuselage's own frame — Z down the spine, a
+  // metre of radius around it — so they only make sense on the body. The wings, rudder and
+  // elevator keep the plain `hull` material: their local frames are chord/span, and the same
+  // shader on them would draw seams across the span instead of around the barrel.
+  const hullBody = hull.clone();
+  enhanceHullMaterial(hullBody);
   const accent = new THREE.MeshStandardMaterial({
     color: PALETTE.hullAccent, roughness: 0.36, metalness: 0.42, envMapIntensity: 1.05,
   });
@@ -73,7 +80,7 @@ export function buildAircraft() {
     [-1.50, 0.83], [-2.40, 0.71], [-3.20, 0.57], [-3.90, 0.44],
     [-4.45, 0.33], [-4.85, 0.25], [-5.05, 0.19],
   ];
-  const body = new THREE.Mesh(buildFuselage(fuselageProfile, 24), hull);
+  const body = new THREE.Mesh(buildFuselage(fuselageProfile, 24), hullBody);
   body.castShadow = true;
   body.receiveShadow = true;
   group.add(body);

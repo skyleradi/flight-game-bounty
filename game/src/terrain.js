@@ -1061,7 +1061,23 @@ function mergeGeometries(list) {
   return geometry;
 }
 
-/** Colours a merged geometry by world height: the green canopy above the dark trunk. */
+/**
+ * Colours a merged geometry by world height: the green canopy above the dark trunk.
+ *
+ * Height alone is not enough to sit a tree on the ground. A trunk that is merely *dark* still
+ * meets the terrain with a hard edge and no contact shadow, and at 500 ft the eye reads that gap
+ * as the tree hovering — which is the single thing that made the forest look pasted onto the
+ * hillside rather than growing out of it.
+ *
+ * So two occlusion terms are baked into the vertex colour here, where they cost nothing at
+ * runtime (the geometry is merged once and instanced hundreds of times):
+ *
+ *  - **Root flare.** The lowest ~1.5 m of trunk goes almost black, falling off quadratically. This
+ *    is the contact shadow the sun's shadow map cannot resolve at this triangle density.
+ *  - **Canopy underside.** A tier's underside is lit only by bounce, so it is darkened with the
+ *    same curve that drives the tier's height. This is what gives a conifer its stacked, volumed
+ *    silhouette instead of one flat green cone.
+ */
 function paintByHeight(geometry, canopyHex, trunkHex) {
   const pos = geometry.getAttribute('position');
   const colors = new Float32Array(pos.count * 3);
@@ -1070,12 +1086,20 @@ function paintByHeight(geometry, canopyHex, trunkHex) {
   const c = new THREE.Color();
   for (let i = 0; i < pos.count; i += 1) {
     const y = pos.getY(i);
-    if (y < 6.5) c.copy(trunk);
-    else {
+    let occ = 1;
+    if (y < 6.5) {
+      c.copy(trunk);
+      // Root flare: darkest at the ground, gone by 1.5 m.
+      const t = Math.max(0, Math.min(1, y / 1.5));
+      occ = 0.30 + 0.70 * t * t;
+    } else {
       // Slight tint per vertex, so the canopy is not one flat green.
       const t = Math.min(1, (y - 6.5) / 24);
       c.copy(trunk).lerp(canopy, Math.min(1, t * 1.9));
+      // Underside of the lowest tiers: bounce-lit only, so darker than the crown.
+      occ = 0.62 + 0.38 * Math.min(1, t * 2.6);
     }
+    c.multiplyScalar(occ);
     colors[i * 3] = c.r; colors[i * 3 + 1] = c.g; colors[i * 3 + 2] = c.b;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));

@@ -60,8 +60,15 @@ export function createHud(canvas) {
 
     const scale = Math.min(1, Math.min(width / 1280, height / 720));
     const cockpit = !!d.cockpit;
-    const r = Math.min(84, height * 0.105) * (cockpit ? 0.82 : 1);
-    const dialY = height - Math.min(118, height * 0.152) * (cockpit ? 1.12 : 1);
+    // The instrument cluster used to be r=84 at 720p, sitting 118 px off the bottom edge. Measured
+    // against the delivered frames, that circle plus its two tapes covered the middle third of the
+    // lower half — which is the part of the frame the valley, the runway and the target all live
+    // in. The cluster is an aid, not the subject, so it is ~17% smaller and sits closer to the
+    // edge; the numbers are still legible at 1280 wide (the tapes are drawn at the same text size,
+    // only their offsets move in). Everything that hangs off the dial follows from these two
+    // numbers, so there is one place to tune it.
+    const r = Math.min(70, height * 0.088) * (cockpit ? 0.82 : 1);
+    const dialY = height - Math.min(104, height * 0.134) * (cockpit ? 1.12 : 1);
 
     drawHeadingRibbon(cx, Math.min(56, height * 0.075), width, d);
 
@@ -70,8 +77,8 @@ export function createHud(canvas) {
     // same screen space only make the panel unreadable.
     if (!cockpit) {
       drawAttitude(cx, dialY, r, d);
-      drawSpeedTape(cx - r - 68, dialY, d, scale);
-      drawAltitudeTape(cx + r + 68, dialY, d, scale);
+      drawSpeedTape(cx - r - 58, dialY, d, scale);
+      drawAltitudeTape(cx + r + 58, dialY, d, scale);
     }
 
     // In the cockpit the 3D panel is the instrument panel, so the flat HUD's blocks move to the
@@ -81,7 +88,7 @@ export function createHud(canvas) {
       drawCompactStatus(width - 156 * scale * 0.92 - 16, 86, d, scale * 0.92);
       drawCompactCombat(width - 156 * scale * 0.92 - 16, 86 + 98 * scale * 0.92, d, scale * 0.92);
     } else {
-      drawEngineBlock(20, height - 146, d, scale);
+      drawEngineBlock(20, height - 132, d, scale * 0.90);
       drawStatusBar(width - 190, height - 122, d, scale);
       drawCombatBlock(width - 190, height - 122 - 92 * scale, d, scale);
     }
@@ -92,7 +99,7 @@ export function createHud(canvas) {
     drawAceBracket(d);
     drawDamageVignette(d);
 
-    drawGateIndicator(cx, dialY - r - (cockpit ? 30 : 44), d, scale * (cockpit ? 0.9 : 1));
+    drawGateIndicator(cx, dialY - r - (cockpit ? 30 : 38), d, scale * (cockpit ? 0.9 : 1));
     drawCrosshair(cx, cy * (cockpit ? 0.86 : 0.72), d);
     // The marker sits on the reticle the rounds actually converge on, which is the crosshair, not
     // the screen's centre in the cockpit view where the panel takes the bottom half.
