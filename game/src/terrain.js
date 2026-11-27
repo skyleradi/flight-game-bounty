@@ -5,6 +5,7 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { WORLD, RUNWAY, PALETTE } from './config.js';
+import { carveCoast } from './sea.js';
 
 /**
  * A small, fast, deterministic noise: octaves of value noise sampled on a lattice, with a
@@ -171,6 +172,12 @@ function heightAt(noise, x, z, gorge = null) {
 
   // The gorge is cut last, so it cuts through the hills and the river alike.
   if (gorge) elevation = carveGorge(elevation, alongRaw, acrossRaw, gorge);
+
+  // The coast is applied last, after the ridge noise, the basin and the rivers: the sea is the
+  // youngest thing in this landscape and it cuts whatever was there before it. Splicing it into the
+  // height function rather than subtracting from the mesh means `terrain.heightAt` reports the true
+  // carved ground, so trees, buildings and boats all agree with what is drawn.
+  elevation = carveCoast(elevation, x, z);
 
   return elevation;
 }
@@ -823,12 +830,15 @@ export function buildForest(terrain) {
   const shrubs = [];
   const boulders = [];
 
-  /** True where a tree can stand: off the airfield, inside the treeline, not on a cliff. */
+  /** True where a tree can stand: off the airfield, dry land, inside the treeline, not on a cliff. */
   function plantable(x, z) {
     const dist = Math.hypot(x - RUNWAY.x, z - RUNWAY.z);
     if (dist < RUNWAY.basinRadius * 0.92) return null;
     const y = terrain.heightAt(x, z);
-    if (y < 26 || y > 700) return null;
+    // Nothing grows below the waterline or in the salt spray just above it: the coast would
+    // otherwise be a forest standing in the sea, which is the tell that the carve was bolted on
+    // after the trees were placed.
+    if (y < 34 || y > 700) return null;
     const s = Math.abs(terrain.heightAt(x + 24, z) - y) + Math.abs(terrain.heightAt(x, z + 24) - y);
     if (s / 24 > 0.66) return null;
     return y;

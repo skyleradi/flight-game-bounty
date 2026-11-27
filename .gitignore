@@ -2,6 +2,7 @@ out/
 node_modules/
 dbg*.mjs
 dev-*.mjs
+probe-*.mjs
 *.png
 !screenshots/*.png
 transcripts*.tar.gz

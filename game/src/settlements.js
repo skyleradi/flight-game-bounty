@@ -21,6 +21,7 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { WORLD, RUNWAY, PALETTE } from './config.js';
+import { coastAt } from './sea.js';
 
 /** Deterministic RNG, same shape as the other modules', so nothing here depends on frame order. */
 function makeRng(seed) {
@@ -31,6 +32,11 @@ function makeRng(seed) {
     s ^= s << 5; s >>>= 0;
     return s / 4294967296;
   };
+}
+
+/** Clamps to 0..1. Local because this module has no shared math import and does not need one. */
+function clamp01(v) {
+  return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 /** A box's eight corners as a merged-ready geometry, translated into world space. */
@@ -136,6 +142,13 @@ const ROOFS = ['#7a3f34', '#8a4a3c', '#5c5148', '#6b5f52', '#4f4a44', '#8f5a44']
 const SLABS = ['#8d8b86', '#9a9791', '#7e7c78'];
 
 /**
+ * The colours a lit window can be. Almost all tungsten (a warm sodium-adjacent yellow), a few
+ * fluorescent (a colder green-white, which is what a shop or a works office actually looks like
+ * from the air), and one television-blue in the mix so a settlement does not read as monochrome.
+ */
+const LAMPS = ['#ffd89a', '#ffcf82', '#ffe8bc', '#d6ecff', '#b9d8ff', '#ffc26e'];
+
+/**
  * A town: rows of houses along a street, a couple of larger blocks, a church with a tower.
  *
  * Laid out on a grid aligned to the valley floor rather than scattered, because scattered buildings
@@ -166,6 +179,16 @@ function planTown(rng, heightAt, centre, { cols, rows, spacing, angle }) {
         wall: WALLS[Math.floor(rng() * WALLS.length)],
         roof: ROOFS[Math.floor(rng() * ROOFS.length)],
         pitch: 2.6 + rng() * 2.2,
+        // Whether this house has its lights on, and which colour each of its rooms burns. Rolled
+        // once at plan time so the pattern is stable: a town whose windows shuffle every frame
+        // would flicker like a broken sign. Roughly a quarter of houses are dark — an occupied
+        // valley at night, not a Christmas display.
+        lit: rng() < 0.74,
+        warm: [
+          LAMPS[Math.floor(rng() * LAMPS.length)],
+          rng() < 0.22 ? null : LAMPS[Math.floor(rng() * LAMPS.length)],
+          rng() < 0.4 ? null : LAMPS[Math.floor(rng() * LAMPS.length)],
+        ],
       });
     }
   }
@@ -173,7 +196,7 @@ function planTown(rng, heightAt, centre, { cols, rows, spacing, angle }) {
 }
 
 /** Builds the merged mesh for a list of houses, plus the church if the town is big enough. */
-function buildTownGeometry(houses, { church = false } = {}) {
+function buildTownGeometry(houses, { church = false, glow = null } = {}) {
   const parts = [];
   for (const h of houses) {
     const storeyH = 3.1;
@@ -189,6 +212,24 @@ function buildTownGeometry(houses, { church = false } = {}) {
       const y = h.y + s * storeyH + 1.55;
       parts.push(paint(box(h.w * 0.86, 1.05, 0.18, h.x, y, h.z + h.d * 0.5, h.rot), '#3a3f45'));
       parts.push(paint(box(h.w * 0.86, 1.05, 0.18, h.x, y, h.z - h.d * 0.5, h.rot), '#3a3f45'));
+      // Lit windows. These are a second geometry with a material that ignores lighting entirely, so
+      // they burn at 2 a.m. and vanish at noon when the group's opacity is faded out. A slab that
+      // passes through the house is the trick: only the few centimetres protruding past each facade
+      // survive the depth test, so one box lights both long walls of a storey.
+      if (glow && h.lit) {
+        const n = h.w > 12 ? 3 : 2;
+        const pitch = (h.w * 0.72) / n;
+        const ca = Math.cos(h.rot);
+        const sa = Math.sin(h.rot);
+        for (let k = 0; k < n; k += 1) {
+          // Not every room is occupied: a house with all its windows lit reads as a light box.
+          if (h.warm[k % h.warm.length] === null) continue;
+          const lx = (k - (n - 1) / 2) * pitch;
+          const wx = h.x + lx * ca;
+          const wz = h.z - lx * sa;
+          glow.push(paint(box(1.55, 0.86, h.d + 0.14, wx, y, wz, h.rot), h.warm[k % h.warm.length]));
+        }
+      }
     }
   }
   if (church) {
@@ -236,6 +277,7 @@ function buildWorks(heightAt, x, z, angle) {
     parts.push(paint(roof(12.4, 3.6, 35, p.x, y + 13, p.z, angle + Math.PI * 0.5), '#6a645b'));
   }
   // Chimneys. Height is the point: they are the landmark.
+  const stacks = [];
   for (const [lx, lz, h] of [[44, -12, 62], [44, 6, 48]]) {
     const p = at(lx, lz);
     const stack = new THREE.CylinderGeometry(3.1, 4.3, h, 12);
@@ -244,6 +286,8 @@ function buildWorks(heightAt, x, z, angle) {
     const band = new THREE.CylinderGeometry(3.3, 3.3, 3.2, 12);
     band.translate(p.x, y + h - 8, p.z);
     parts.push(paint(band, '#8c4a3a'));
+    // The stack head, recorded for the night layer: an obstruction light goes on top of it.
+    stacks.push({ x: p.x, y: y + h, z: p.z });
   }
   // Cooling towers, hyperbolic in profile, which is two stacked cylinders here.
   for (const lx of [-46, -78]) {
@@ -268,7 +312,7 @@ function buildWorks(heightAt, x, z, angle) {
     const p = at(-36 + i * 9, 26);
     parts.push(paint(box(0.8, 8, 0.8, p.x, y, p.z, angle), '#7d766a'));
   }
-  return { geometry: merge(parts), x, z, y };
+  return { geometry: merge(parts), x, z, y, stacks };
 }
 
 /**
@@ -279,9 +323,15 @@ function buildWorks(heightAt, x, z, angle) {
  */
 function buildHarbour(heightAt, x, z, angle) {
   const parts = [];
-  const y = Math.max(7.5, heightAt(x, z));
+  // The quay deck sits at the land's own height, but never below the waterline + 3 m: a quay that
+  // is awash is not a quay.
+  const groundY = heightAt(x, z);
+  const y = Math.max(9.4, groundY);
   const ca = Math.cos(angle);
   const sa = Math.sin(angle);
+  // `lx` runs along the shore and `-lz` runs seaward when `angle` is PI/2 (the coast's own axis).
+  // The breakwater is built at negative `lz` for exactly that reason: it has to reach out over the
+  // water, not back into the car park.
   const at = (lx, lz) => ({ x: x + lx * ca - lz * sa, z: z + lx * sa + lz * ca });
 
   // Quay: a long concrete edge.
@@ -312,6 +362,135 @@ function buildHarbour(heightAt, x, z, angle) {
     parts.push(paint(roof(39, 3.4, 21, p.x, y + 11, p.z, angle), '#6f6a62'));
   }
   return { geometry: merge(parts), x, z, y };
+}
+
+/**
+ * The night layer: window glow, street lamps along the roads, harbour floodlights and the red
+ * obstruction lamps on the chimneys.
+ *
+ * Everything here is `MeshBasicMaterial` — it ignores the scene lights entirely, which is the whole
+ * point: at 2 a.m. a window is not lit by the moon, it is lit by a bulb inside it. The group's
+ * opacity is driven by the day cycle, so the same geometry is invisible at noon and burning at
+ * midnight without rebuilding anything.
+ *
+ * The glow geometry is built *inside* the building pass (see `buildTownGeometry`), because a lit
+ * window has to be punched into the exact facade the wall was drawn on. What comes back here is a
+ * list of already-positioned boxes, which is merged into one buffer so a whole town's windows cost
+ * one draw call.
+ */
+function buildNightLights(nightTowns, heightAt) {
+  const group = new THREE.Group();
+  group.name = 'night-lights';
+
+  const warmMat = new THREE.MeshBasicMaterial({
+    vertexColors: true, transparent: true, opacity: 0, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: true, toneMapped: false,
+  });
+  const lampMat = new THREE.MeshBasicMaterial({
+    color: 0xffd190, transparent: true, opacity: 0, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: true, toneMapped: false,
+  });
+  const redMat = new THREE.MeshBasicMaterial({
+    color: 0xff4030, transparent: true, opacity: 0, depthWrite: false,
+    blending: THREE.AdditiveBlending, fog: true, toneMapped: false,
+  });
+
+  // --- Street lamps: pairs down each town's main street, on a 46 m pitch. A lamp is a short post
+  // and a glowing head; the post is ordinary geometry so it is only built once, while the head
+  // shares the one emissive material so all of them fade together.
+  const postParts = [];
+  const headParts = [];
+  for (const t of nightTowns) {
+    const n = 9;
+    const angle = t.streetAngle ?? 0;
+    const ca = Math.cos(angle);
+    const sa = Math.sin(angle);
+    for (let i = 0; i < n; i += 1) {
+      const along = (i - (n - 1) / 2) * 46;
+      for (const side of [-1, 1]) {
+        // Lamps sit on the kerb, 15 m either side of the centre line.
+        const lx = along * ca - side * 15 * sa;
+        const lz = along * sa + side * 15 * ca;
+        const x = t.x + lx;
+        const z = t.z + lz;
+        const y = heightAt(x, z);
+        if (Math.abs(y - t.h) > 14) continue; // off the flat: no lamp hanging over a ravine
+        postParts.push(paint(box(0.42, 7.2, 0.42, x, y + 3.6, z, 0), '#5d5a54'));
+        headParts.push(paint(box(1.5, 0.42, 1.5, x, y + 7.4, z, 0), '#ffe0a8'));
+      }
+    }
+  }
+  if (postParts.length) {
+    const posts = new THREE.Mesh(merge(postParts), new THREE.MeshStandardMaterial({
+      vertexColors: true, roughness: 0.9, metalness: 0.1,
+    }));
+    posts.name = 'lamp-posts';
+    posts.castShadow = false;
+    group.add(posts);
+  }
+  if (headParts.length) {
+    const heads = new THREE.Mesh(merge(headParts), lampMat);
+    heads.name = 'lamp-heads';
+    group.add(heads);
+  }
+
+  // --- Yard and quay floodlights: the high lamps that light a works yard or a harbour apron. Same
+  // material as the street lamps but a much bigger head, because a floodlight seen from the air is
+  // a bright core with a halo, not a dot.
+  const yardParts = [];
+  for (const t of nightTowns) {
+    for (const p of t.yard ?? []) {
+      yardParts.push(paint(box(3.0, 3.0, 3.0, p.x, p.y, p.z, 0), '#ffe4b0'));
+    }
+  }
+  if (yardParts.length) {
+    const yard = new THREE.Mesh(merge(yardParts), lampMat);
+    yard.name = 'yard-lights';
+    group.add(yard);
+  }
+
+  // --- Chimney obstruction lamps: one red light on each stack of the works. These are the lights a
+  // pilot actually uses, so they get their own material and a slow pulse applied in `update`.
+  const redParts = [];
+  for (const t of nightTowns) {
+    for (const s of t.stacks ?? []) {
+      redParts.push(paint(box(2.4, 2.4, 2.4, s.x, s.y + 1.0, s.z, 0), '#ff4030'));
+    }
+  }
+  let redLights = null;
+  if (redParts.length) {
+    redLights = new THREE.Mesh(merge(redParts), redMat);
+    redLights.name = 'stack-lights';
+    group.add(redLights);
+  }
+
+  return {
+    group,
+    warmMat,
+    lampMat,
+    redMat,
+    /**
+     * Fades the whole night layer in or out. `level` is the day cycle's light level: 1 at noon, 0 at
+     * midnight. The layer starts burning at dusk (0.45) and is at full strength by the time the sun
+     * is properly down, so a settlement lights up gradually rather than snapping on.
+     *
+     * The window glow is held back a little relative to the street lamps: people turn their lights
+     * on as it gets dark, but a street lamp comes on at a threshold, which is the small detail that
+     * makes dusk read as dusk.
+     */
+    setNight(level, time = 0) {
+      const dark = 1 - clamp01(level);
+      // Windows and lamps ramp over the bottom half of the light range.
+      const lit = clamp01((dark - 0.35) / 0.5);
+      const lampLit = clamp01((dark - 0.18) / 0.34);
+      warmMat.opacity = lit * 0.95;
+      lampMat.opacity = lampLit;
+      // Obstruction lights pulse: a slow 2-second breath, the way a real one does, and only at
+      // night. They are dimmed by the same lamp curve so they do not appear at noon.
+      redMat.opacity = lampLit * (0.55 + 0.45 * Math.sin(time * 2.1));
+      group.visible = dark > 0.16;
+    },
+  };
 }
 
 /**
@@ -427,15 +606,23 @@ export function buildSettlements(terrain) {
   });
 
   const sites = [];
+  // Every lit window in the valley, already positioned in world space, waiting to be merged into
+  // one additive mesh. Filled by `buildTownGeometry` as each town is built.
+  const glowParts = [];
+  // A parallel record of each town's street frame and chimney tops, which the night layer needs to
+  // hang lamps and obstruction lights. The building pass knows where the chimneys are; nothing else
+  // does, so it is recorded here rather than re-derived.
+  const nightTowns = [];
   // Material per town is shared: one buffer per town keeps a town one draw call while still
   // letting each have its own houses.
   for (let i = 0; i < towns.length; i += 1) {
     const t = towns[i];
+    const streetAngle = rng() * Math.PI;
     const houses = planTown(rng, heightAt, t, {
-      cols: 4 + (i % 3), rows: 3 + (i % 2), spacing: 34, angle: rng() * Math.PI,
+      cols: 4 + (i % 3), rows: 3 + (i % 2), spacing: 34, angle: streetAngle,
     });
     if (!houses.length) continue;
-    const geo = buildTownGeometry(houses, { church: houses.length > 12 });
+    const geo = buildTownGeometry(houses, { church: houses.length > 12, glow: glowParts });
     if (!geo) continue;
     const mesh = new THREE.Mesh(geo, material);
     mesh.castShadow = true;
@@ -443,6 +630,7 @@ export function buildSettlements(terrain) {
     mesh.name = `town-${i}`;
     group.add(mesh);
     sites.push({ x: t.x, z: t.z, radius: 190, kind: 'town' });
+    nightTowns.push({ x: t.x, z: t.z, h: t.h, streetAngle });
   }
 
   // The works goes on flat ground with a clear run to the valley floor, offset from the largest
@@ -470,24 +658,50 @@ export function buildSettlements(terrain) {
         mesh.name = 'works';
         group.add(mesh);
         sites.push({ x: wx, z: wz, radius: 150, kind: 'works' });
+        // The works' own chimneys, plus a pair of floodlit yard lamps on the shed corners, so the
+        // factory is the thing that gives the valley floor away at night.
+        nightTowns.push({
+          x: wx, z: wz, h: works.y, streetAngle: 0, stacks: works.stacks,
+          yard: [[-46, -18], [46, -18], [-46, 18], [46, 18]].map(([lx, lz]) => ({
+            x: wx + lx, z: wz + lz, y: works.y,
+          })),
+        });
       }
     }
   }
 
-  // The harbour: the lowest flat site near the map edge where the sea plane shows through. Kept
-  // clear of the towns so it reads as its own place, and required to be genuinely coastal — a
-  // harbour inland is a warehouse, not a port.
+  // The harbour: on the coast, which now actually exists.
+  //
+  // The old version looked for a low flat candidate near the map edge, which worked only because
+  // there was no sea at all — it was a warehouse on dry grass with a breakwater running into a
+  // meadow. The coast has a known shape now (`coastAt`), so the harbour is placed against it: walk
+  // the shoreline, and take the first site that is flat, above the waterline, and has deep water a
+  // few hundred metres out. That last test is what makes it a port rather than a beach with cranes.
   let harbour = null;
-  for (const c of candidates) {
-    const edge = Math.max(Math.abs(c.x), Math.abs(c.z));
-    if (edge < WORLD.size * 0.30) continue;
-    if (taken.some((t) => Math.hypot(t.x - c.x, t.z - c.z) < 700)) continue;
-    if (flatness(heightAt, c.x, c.z, 170, 40) > 26) continue;
-    harbour = c;
-    break;
+  {
+    let best = null;
+    for (let i = 0; i < 120; i += 1) {
+      const z = -WORLD.size * 0.40 + (i / 119) * WORLD.size * 0.80;
+      const sx = coastAt(z);
+      // Inland of the waterline, far enough back for the quay and the sheds.
+      for (const back of [150, 220, 300, 380]) {
+        const x = sx - back;
+        const h = heightAt(x, z);
+        if (h < 9 || h > 52) continue;
+        if (flatness(heightAt, x, z, 150, 60) > 12) continue;
+        // Deep water offshore: the quay has to face something a ship can float in.
+        const off = heightAt(sx + 380, z);
+        if (off > -6) continue;
+        if (taken.some((t) => Math.hypot(t.x - x, t.z - z) < 620)) continue;
+        const score = Math.abs(h - 22) + flatness(heightAt, x, z, 150, 60) * 1.5 - off * 0.12;
+        if (!best || score < best.score) best = { x, z, h, score, angle: Math.PI * 0.5 };
+        break;
+      }
+    }
+    harbour = best;
   }
   if (harbour) {
-    const h = buildHarbour(heightAt, harbour.x, harbour.z, rng() * Math.PI);
+    const h = buildHarbour(heightAt, harbour.x, harbour.z, harbour.angle);
     if (h.geometry) {
       const mesh = new THREE.Mesh(h.geometry, material);
       mesh.castShadow = true;
@@ -510,5 +724,35 @@ export function buildSettlements(terrain) {
     group.add(roads);
   }
 
-  return { group, sites, towns };
+  // --- The night layer, built last because it needs every town's street frame and the works'
+  // chimney heads, which the passes above only now know.
+  //
+  // Harbour floodlights are appended here rather than in `buildHarbour`, because they are pure light
+  // with no geometry behind them: a lamp on the quay is a glowing point on a pole, and the pole is
+  // already part of the harbour mesh.
+  if (harbour) {
+    const y = Math.max(9.4, heightAt(harbour.x, harbour.z));
+    const ca = Math.cos(harbour.angle);
+    const sa = Math.sin(harbour.angle);
+    const yard = [];
+    for (let i = 0; i < 6; i += 1) {
+      const lx = -58 + i * 24;
+      const lz = -4;
+      yard.push({ x: harbour.x + lx * ca - lz * sa, y: y + 17, z: harbour.z + lx * sa + lz * ca });
+    }
+    nightTowns.push({ x: harbour.x, z: harbour.z, h: y, streetAngle: harbour.angle, yard });
+  }
+
+  const night = buildNightLights(nightTowns, heightAt);
+  // The window glow: already-positioned boxes from the town pass, merged into a single additive
+  // mesh. Emptied list is fine — a world with no towns simply has no windows lit.
+  if (glowParts.length) {
+    const glow = new THREE.Mesh(merge(glowParts), night.warmMat);
+    glow.name = 'window-glow';
+    glow.renderOrder = 2;
+    night.group.add(glow);
+  }
+  group.add(night.group);
+
+  return { group, sites, towns, night };
 }

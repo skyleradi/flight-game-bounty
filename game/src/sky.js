@@ -215,26 +215,75 @@ export function buildClouds(opts = {}) {
     map: texture, transparent: true, opacity: 0.9, depthWrite: false, fog: false,
   });
 
-  const count = Math.round(34 * cover);
+  // Two decks, not one.
+  //
+  // A single layer of puffs all at the same altitude reads as a flat ceiling, which is the giveaway
+  // that it is a set of sprites. Real sky has a low deck that is fast, detailed and close, and a
+  // high deck that is slow, thin and far — and the gap between them is what gives the cockpit a
+  // sense of height. The high deck is dimmer and much larger so it never competes with the low one
+  // for attention; it is the thing you fly past, not the thing you fly through.
+  //
+  // Both decks drift on the same wind but at different rates (the high deck sees stronger wind),
+  // which stops the two layers moving as one rigid sheet.
+  const decks = [
+    { layer: 'low', count: Math.round(30 * cover), scale: 1.0, alt: 1.0, alpha: 1.0, drift: 1.0 },
+    { layer: 'high', count: Math.round(16 * cover), scale: 2.4, alt: 2.6, alpha: 0.5, drift: 2.1 },
+  ];
+
   const puffs = [];
-  for (let i = 0; i < count; i += 1) {
-    const sprite = new THREE.Sprite(material.clone());
-    const angle = rnd() * Math.PI * 2;
-    const radius = 900 + rnd() * WORLD.size * 0.42;
-    const scale = 900 + rnd() * 1500;
-    sprite.position.set(
-      Math.cos(angle) * radius,
-      (900 + rnd() * 1500) * deck,
-      Math.sin(angle) * radius,
-    );
-    sprite.scale.set(scale, scale * (0.4 + rnd() * 0.16), 1);
-    sprite.material.opacity = (0.34 + rnd() * 0.4) * Math.min(1, cover * 1.1);
-    group.add(sprite);
-    puffs.push({ sprite, drift: (3.5 + rnd() * 6) * drift });
+  for (const d of decks) {
+    for (let i = 0; i < d.count; i += 1) {
+      const sprite = new THREE.Sprite(material.clone());
+      const angle = rnd() * Math.PI * 2;
+      // The high deck reaches further out, because it is seen from further away.
+      const radius = (d.layer === 'high' ? 1500 : 900) + rnd() * WORLD.size * 0.42;
+      const scale = (900 + rnd() * 1500) * d.scale;
+      sprite.position.set(
+        Math.cos(angle) * radius,
+        (900 + rnd() * 1500) * deck * d.alt,
+        Math.sin(angle) * radius,
+      );
+      sprite.scale.set(scale, scale * (0.4 + rnd() * 0.16), 1);
+      sprite.material.opacity = (0.34 + rnd() * 0.4) * Math.min(1, cover * 1.1) * d.alpha;
+      sprite.userData.layer = d.layer;
+      // The opacity as built, kept so a retheme can dim it without compounding: `retheme` runs on
+      // every hour change, and a plain `opacity *= 0.45` would fade the deck to nothing by dusk.
+      sprite.userData.baseOpacity = sprite.material.opacity;
+      group.add(sprite);
+      puffs.push({ sprite, drift: (3.5 + rnd() * 6) * drift * d.drift, layer: d.layer });
+    }
   }
 
   return {
     group,
+    /**
+     * Recolours the deck for the hour. By day the puffs are white; at dusk and dawn they take the
+     * sun's own colour, which is what makes a sunset look like a sunset rather than a white ceiling
+     * with an orange sky behind it; at night they go a dim blue-grey and nearly vanish, because a
+     * cloud at night is only visible where it occludes stars.
+     */
+    retheme(theme) {
+      const sun = theme?.sun ?? { r: 1, g: 1, b: 1 };
+      const light = theme?.lightLevel ?? 1;
+      const night = theme?.isNight ?? false;
+      const tint = new THREE.Color(
+        night ? 0.22 : 0.55 + light * 0.45,
+        night ? 0.24 : 0.58 + light * 0.42,
+        night ? 0.30 : 0.66 + light * 0.34,
+      );
+      // A warm wash at low sun. `sun` is the theme's own sun colour, so this tracks the palette
+      // rather than being a second guess at what sunset looks like.
+      if (!night && light < 0.62) {
+        const w = 1 - light / 0.62;
+        tint.r = Math.min(1, tint.r + sun.r * w * 0.32);
+        tint.g = Math.min(1, tint.g + sun.g * w * 0.16);
+        tint.b = Math.min(1, tint.b + sun.b * w * 0.02);
+      }
+      for (const p of puffs) {
+        p.sprite.material.color.copy(tint);
+        p.sprite.material.opacity = p.sprite.userData.baseOpacity * (night ? 0.45 : 1);
+      }
+    },
     update(dt, wind = null) {
       const wx = wind ? wind.x : 0;
       const wz = wind ? wind.z : 0;

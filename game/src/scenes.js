@@ -11,7 +11,7 @@
 import { CAMPAIGN, RUNWAY } from './config.js';
 import { placeInAir } from './physics.js';
 import { nextGate, scoreRound, styleGate } from './mission.js';
-
+import { coastAt } from './sea.js';
 /** Marks the first `n` gates as flown and highlights the one the pilot is flying to. */
 function markGates(game, n) {
   game.gates.forEach((g, i) => {
@@ -462,6 +462,151 @@ export const SCENES = {
     game.sortie.score = 410;
     game.dayCycle.setHour(10.4);
     game.setCinema({ back: 0.42, up: 0.40, side: 5.5 });
+    game.setView('chase');
+  },
+
+  /**
+   * The coast: the harbour, the sea and the fleet, seen from the air at the end of the day.
+   *
+   * This is the shot the world was missing. The other scenes prove the valley, the weather and the
+   * fight; none of them shows water, because until the heightfield was carved there was none to
+   * show. Framed from inland looking seaward so the shoreline runs across the frame diagonally:
+   * beach in the foreground, breakwater and quay in the middle, open water and hulls behind.
+   */
+  coast(game) {
+    game.loadRound(3, { briefing: false });
+    game.beginRound();
+    game.setPhase('flying');
+
+    game.dayCycle.setHour(16.4);
+
+    const H = game.terrain.heightAt;
+    // Framed from *seaward*, looking back at the port.
+    //
+    // The first three attempts all put the camera inland and looked out, and all three failed the
+    // same way: inland of the quay there is a kilometre of flat coastal plain, so the water did not
+    // start until 1.1 km out and the ship was a smudge no matter where it was anchored. Turning the
+    // camera around fixes the composition for free — the harbour becomes the background, the hull
+    // sits in the middle distance, and the foreground is open water with a wave on it.
+    const port = game.settlements.sites.find((s) => s.kind === 'harbour');
+    const target = port ?? { x: 2425, z: 1300 };
+
+    // Find the deep water the ship will sit in: march seaward (+X) from the quay until the shelf
+    // drops away. The quay was placed by the same test, so this always finds water.
+    let shipX = target.x + 420;
+    let shipZ = target.z;
+    for (let x = target.x + 120; x < target.x + 900; x += 20) {
+      if (H(x, target.z) < -9) { shipX = x; break; }
+    }
+
+    // The camera sits beyond the ship and above the water, angled back down at the port.
+    const from = { x: shipX + 300, z: shipZ + 340 };
+    const heading = Math.atan2(target.x - from.x, -(target.z - from.z));
+    placeInAir(
+      game.aircraftState,
+      from.x, 165, from.z,
+      heading, 78, -0.17, 0.22,
+    );
+    game.aircraftState.fuel = 71;
+    game.aircraftState.health = 93;
+    game.aircraftState.throttle = 0.86;
+    game.sortie.timeLeft = 96;
+    game.sortie.started = true;
+    game.sortie.score = 642;
+    markGates(game, 2);
+    game.setView('chase');
+
+    // The coaster, now in deep water and in frame by construction: it goes exactly where the camera
+    // ray found the shelf drop off, half way between the camera and the quay.
+    const ship = game.fleet.ships[0]?.ship;
+    if (ship) {
+      // Half way between the lens and the quay, so the hull is in the middle distance rather than
+      // on top of the camera or lost against the sheds.
+      const mx = shipX + (target.x - shipX) * 0.18;
+      const mz = shipZ + (target.z - shipZ) * 0.18;
+      ship.position.set(mx, 6, mz);
+      // Broadside to the camera: a coaster seen end-on is a barge.
+      ship.rotation.y = heading + Math.PI * 0.5;
+      ship.userData.anchor = { x: mx, z: mz };
+      ship.userData.drift = 0;
+    }
+  },
+
+  /**
+   * A dogfight, framed so the interceptor is unmistakably visible.
+   *
+   * The combat scene shows the aircraft's own guns firing at a distant flak tower, which proves the
+   * systems work but shows no opponent. This one puts a live interceptor 60 m off the nose in a hard
+   * bank with a second one trailing, because the thing worth showing is that the enemy is a shaped,
+   * readable aircraft with a red stripe — not a dot on a radar.
+   */
+  dogfight(game) {
+    game.loadRound(3);
+    game.beginRound();
+    game.setPhase('flying');
+
+    const st = game.aircraftState;
+    st.position.set(240, 470, -1150);
+    st.heading = 2.42;
+    st.pitch = 0.02;
+    st.roll = 0.22;
+    st.speed = 96;
+    st.throttle = 0.92;
+    st.fuel = 58;
+    st.health = 74;
+    st.boost = 0.55;
+    game.sortie.timeLeft = 128;
+    game.sortie.started = true;
+    game.sortie.score = 1284;
+    game.sortie.gatesPassed = 4;
+    game.sortie.firing = true;
+    // Daylight, deliberately. At dusk the interceptor is a dark grey shape against dark terrain and
+    // reads as a smudge; the point of this shot is the enemy's silhouette, so it is flown in light.
+    game.dayCycle.setHour(14.8);
+
+    // Placement is done in the aircraft's own frame, not in world axes.
+    //
+    // The first version subtracted from world z to mean "ahead", which is only correct when the
+    // heading is 0. At heading 2.42 the forward vector is (+0.66, 0, +0.75), so `z - 62` put the
+    // interceptor 69 m BEHIND the aircraft — inside the chase camera's blind spot, which is why the
+    // screenshot showed an empty sky and a HUD reading "INTERCEPTOR 1.3 km". Forward and right are
+    // derived from the heading here so the shot cannot silently invert again.
+    const fwd = { x: Math.sin(st.heading), z: -Math.cos(st.heading) };
+    const right = { x: Math.cos(st.heading), z: Math.sin(st.heading) };
+    const place = (ahead, lateral, up) => ({
+      x: st.position.x + fwd.x * ahead + right.x * lateral,
+      y: st.position.y + up,
+      z: st.position.z + fwd.z * ahead + right.z * lateral,
+    });
+
+    const drones = game.airDefence.drones;
+    if (drones.length >= 2) {
+      // Lead: close and off to one side, banking away — the one the guns are tracking.
+      const lead = place(48, -26, -6);
+      drones[0].position.set(lead.x, lead.y, lead.z);
+      drones[0].heading = st.heading - 0.37;
+      drones[0].pitch = -0.06;
+      drones[0].bank = 0.62;
+      drones[0].speedNow = 88;
+      drones[0].brain.state = 'extend';
+      drones[0].group.position.copy(drones[0].position);
+      drones[0].group.rotation.set(drones[0].pitch, -drones[0].heading, drones[0].bank, 'YXZ');
+      drones[0].group.visible = true;
+
+      // Wingman further out and higher, turning in: depth, so the fight is not one sprite.
+      const wing = place(150, 74, 26);
+      drones[1].position.set(wing.x, wing.y, wing.z);
+      drones[1].heading = st.heading + 0.43;
+      drones[1].pitch = 0.04;
+      drones[1].bank = -0.44;
+      drones[1].speedNow = 82;
+      drones[1].brain.state = 'pursue';
+      drones[1].group.position.copy(drones[1].position);
+      drones[1].group.rotation.set(drones[1].pitch, -drones[1].heading, drones[1].bank, 'YXZ');
+      drones[1].group.visible = true;
+    }
+
+    game.setCinema({ back: 0.34, up: 0.30, side: 4.2 });
     game.setView('chase');
   },
 

@@ -14,7 +14,7 @@ import * as THREE from '../vendor/three.module.min.js';
 import {
   AIRCRAFT, CAMPAIGN, ENEMY, MISSION, PALETTE, RUNWAY, STEP, WORLD, windVector, campaignPar,
 } from './config.js';
-import { buildTerrain, buildWater, buildForest } from './terrain.js';
+import { buildTerrain, buildForest } from './terrain.js';
 import { buildObstacles, checkCollision, collisionDamage } from './obstacles.js';
 import { buildAirfield, buildApproachMarkers } from './airfield.js';
 import { buildAircraft, createAircraftState } from './aircraft.js';
@@ -38,6 +38,7 @@ import {
 } from './sky.js';
 import { buildSettlements } from './settlements.js';
 import { buildStars, buildMoon, createDayCycle, paletteFor } from './daycycle.js';
+import { buildSea, buildFleet, buildShoreFoam } from './sea.js';
 
 const MPS_TO_KNOTS = 1.94384;
 const M_TO_FEET = 3.28084;
@@ -64,7 +65,14 @@ export function createGame({ canvas, hudCanvas }) {
   let round = CAMPAIGN[0];
   const terrain = buildTerrain(round);
   scene.add(terrain.mesh);
-  scene.add(buildWater());
+
+  // The sea. The heightfield's +X flank is carved down to -34 m by `carveCoast`, so this surface is
+  // the only place in the world with open water — and the only reason the harbour's breakwater
+  // points at something a ship can float in.
+  const sea = buildSea();
+  scene.add(sea.mesh);
+  const foam = buildShoreFoam();
+  scene.add(foam);
 
   applyFog(scene, { ...round.sky, visibility: round.visibility });
 
@@ -92,6 +100,12 @@ export function createGame({ canvas, hudCanvas }) {
   // the rest of the world sits on, so nothing floats and nothing sinks.
   const settlements = buildSettlements(terrain);
   scene.add(settlements.group);
+
+  // The fleet, placed after the settlements so the harbour watch can lie off the actual quay rather
+  // than at a guessed coordinate.
+  const harbourSite = settlements.sites.find((s) => s.kind === 'harbour') ?? null;
+  const fleet = buildFleet(terrain.heightAt, { near: harbourSite });
+  scene.add(fleet.group);
 
   let gates = buildCourse(terrain, round);
   let gateVisuals = buildGateMeshes(gates, round.radius);
@@ -123,6 +137,7 @@ export function createGame({ canvas, hudCanvas }) {
   scene.add(obstacles.group);
   haze.patchObject(obstacles.group);
   haze.patchObject(settlements.group);
+  haze.patchObject(fleet.group);
 
   // --- Night sky. Stars and a moon on the same far dome as the sun, hidden by day and faded in as
   // the sun goes down. Both ride the day cycle, so raising the hour is the only thing needed to
@@ -137,6 +152,38 @@ export function createGame({ canvas, hudCanvas }) {
     sun, moon, stars, sky, lights, haze, scene,
   });
   dayCycle.setBase(round.sky);
+
+  /**
+   * Pushes the hour into everything that is not the day cycle's own concern: the cloud deck's
+   * colour and the night layer's lamps.
+   *
+   * This exists because `dayCycle.setHour` is called from more than one place — the round loader,
+   * every screenshot scene, and any script that wants a different time — and each of those would
+   * otherwise have to remember to repaint the clouds itself. Wrapping the one entry point means a
+   * new caller cannot forget.
+   */
+  function syncAtmosphere() {
+    clouds.retheme(dayCycle.theme());
+    settlements.night.setNight(dayCycle.lightLevel(), 0);
+  }
+  {
+    const setHourRaw = dayCycle.setHour;
+    dayCycle.setHour = (h) => {
+      const theme = setHourRaw.call(dayCycle, h);
+      syncAtmosphere();
+      return theme;
+    };
+    const advanceRaw = dayCycle.advance;
+    dayCycle.advance = (h) => {
+      const theme = advanceRaw.call(dayCycle, h);
+      syncAtmosphere();
+      return theme;
+    };
+  }
+
+  // The initial paint, now that both the cloud deck and the night layer exist: the wrapper above
+  // only fires when the clock *changes*, and the world is already built at `round.hour`.
+  syncAtmosphere();
 
   // The air defence belongs to the round, like the obstacles: it is rebuilt when the round changes,
   // because the count of guns is part of what makes the later sorties hard.
@@ -302,6 +349,8 @@ export function createGame({ canvas, hudCanvas }) {
     });
     scene.add(clouds.group);
     haze.patchObject(clouds.group);
+    // And painted for the hour it was built at, since `buildClouds` returns white.
+    clouds.retheme(dayCycle.theme());
     if (rain) scene.remove(rain.object);
     rain = buildRain(round.rain);
     if (rain) scene.add(rain.object);
@@ -816,6 +865,20 @@ export function createGame({ canvas, hudCanvas }) {
     clouds.update(dt, aircraftState.wind);
     obstacles.update(dt, sortie.time);
     pickupVisuals.update(dt, sortie.time);
+
+    // The night layer reads the clock, not a flag: a sortie that starts at dusk lights the valley
+    // up as it flies, and one that runs into dawn watches it go out. The time argument drives the
+    // slow pulse of the obstruction lights.
+    settlements.night.setNight(dayCycle.lightLevel(), sortie.time);
+
+    // Sea and fleet ride the same clock as the sky: the glitter follows the sun, dies at night, and
+    // the hulls bob on the wave trains the shader is already displacing the surface with.
+    sea.update(dt, {
+      sunDirection: sun.direction,
+      sunColor: dayCycle.theme().sun,
+      light: 0.12 + dayCycle.lightLevel() * 0.9,
+    });
+    fleet.update(dt, sortie.time);
     if (rain) rain.update(dt, camera, aircraftState.wind);
     // The hit flash decays on the render clock, not the physics clock, so a paused frame still
     // fades instead of freezing a red screen.
@@ -996,6 +1059,8 @@ export function createGame({ canvas, hudCanvas }) {
     // A getter, not a value: the air defence is rebuilt on every round change, so a captured
     // reference would keep pointing at the first round's empty emplacements.
     get airDefence() { return airDefence; },
+    get sea() { return sea; },
+    get fleet() { return fleet; },
     get gates() { return gates; },
     get obstacles() { return obstacles; },
     get gateVisuals() { return gateVisuals; },
