@@ -11,6 +11,60 @@ Terakhir diperbarui: 27 Nov 2026, sesi lanjutan (world upgrade).
 
 ## SESI INI: world upgrade (bangunan, jalan, laut, pabrik, waktu)
 
+### Perbaikan akhir sesi: dua shot lemah + bug cahaya malam
+
+**Bug: bangunan tetap putih di malam hari.** `rethemeLights` di `sky.js` hanya mengatur `sun`,
+`hemi`, dan `ambient` — variabel `fill` ada di `group.userData` tapi **tidak pernah disentuh**, jadi
+satu DirectionalLight kedua terus menyinari scene dari atas dengan intensitas konstan **0.42** jam
+2 pagi. Lebih buruk: ambient punya bug terbalik — `sunIntensity < 1.2 ? 0.55 : 0.35`, yang **menaikkan**
+ambient saat malam. Efeknya dinding plester putih kota tetap putih sepanjang malam, dan window-glow
+tidak punya kontras untuk dibaca.
+
+Fix: keduanya sekarang diskalakan `theme.lightLevel` (0..1 dari day cycle):
+```
+fill    = 0.06 + level * 0.36     (malam 0.06, siang 0.42 — siang tidak berubah)
+ambient = 0.10 + level * 0.30     (malam 0.10, siang 0.40)
+```
+Floor non-nol disengaja: dinding tetap punya siluet di bawah bulan, jadi kota terbaca **gelap**, bukan
+lubang hitam. Dampak: `settlement` naik dari 6/10 → **9/10** (vision: "bright and clear, good contrast
+between green terrain, red roofs, grey mountains").
+
+**Bug: `dogfight` — drone di frame tapi tak terlihat.** Bukan masalah penempatan. Probe proyeksi
+membuktikan drone 0 ada di piksel (424,276), 82 m dari kamera, 6 mesh lengkap, `visible: true`.
+Akar masalahnya: scene ditaruh di `(240,470,-1150)` **di dalam kanyon** — tanah di bawah kamera 507 m,
+lebih tinggi dari pesawat (470 m). Chase camera punya terrain clamp yang mendorongnya naik 40 m,
+hasilnya `camFwd.y = -0.694`: kamera menunduk **44°** ke tanah. Latar di belakang drone adalah dinding
+tanah abu-abu yang warnanya sama dengan cat drone (`4a4f56`).
+
+Fix: pindah ke `(-750, 470, 0)` di atas paparan pesisir datar (tinggi 58 m, relief 0 m) sehingga clamp
+tidak pernah aktif. Lead drone dinaikkan 13 m di atas hidung dan didekatkan ke 34 m supaya siluetnya
+terbaca terhadap langit. Hasil: 2 drone jelas + 1 ketiga sebagian, komposisi **8/10**.
+
+**Bug: `coast` — kapal di luar frame, pelabuhan tak terbaca.** Ship 0 diproyeksikan ke piksel
+(1672,839) — **di luar frame sama sekali**. Setelah dipindah ke frame kamera sendiri: 274 m, piksel
+(460,594). Masalah kedua: pelabuhan berjarak 641 m sehingga crane jadi smear. Fix: lensa didekatkan ke
+`target + (330,250)` pada 118 m, kapal ditempatkan di frame kamera (`ahead 175`, `lateral -96`), plus
+**kapal kedua** di background. Hasil: dock, crane, coaster dengan container terbaca, **7/10**.
+
+**Bug: `night` — kota di luar pandangan.** Pesawat terbang `th+190` dengan pitch −0.13 rad (−7°) →
+kota jatuh 36° di bawah sumbu pandang, proyeksi ke piksel y=561/720: teknis masuk frame, praktis tak
+terlihat. Fix: turunkan ke `th+105`, pitch −0.30 rad, cinema `back 0.58 / up 0.46`. Sekarang kota
+dengan jendela hangat + lampu jalan terlihat di bawah, bintang tetap ada.
+
+### Konsekuensi gate: maksimal 4 screenshot
+`main.ts` baris 28 → `screenshots: { max: 4, max_bytes: 262144 }`. Empat yang dipilih untuk sebaran
+maksimum, bukan skor individual tertinggi:
+
+| File | Scene | Isi |
+|---|---|---|
+| `1-settlement.jpg` | settlement | kota + atap merah + jalan + pabrik, 9/10 |
+| `2-dogfight.jpg` | dogfight | dua pesawat musuh terbaca, 8/10 |
+| `3-coast.jpg` | coast | harbour + crane + coaster container, 7/10 |
+| `4-night.jpg` | night | kota bercahaya + bintang + nav light, 6/10 |
+
+`shots-final.mjs` menghapus isi `screenshots/` dulu (sisa file lama ikut dihitung ke cap 4), lalu
+menulis JPEG dengan quality walk turun sampai tiap file ≤ 250 KB.
+
 ### Modul baru: `game/src/settlements.js` (~20 KB)
 Lapisan permukiman 3D yang dibangun **dari heightfield**, bukan ditempel manual.
 

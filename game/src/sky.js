@@ -157,12 +157,28 @@ export function buildLights(sunDir, theme = null) {
 
 /** Repaints the lights for a round: the sun's colour and strength, and the sky's fill. */
 export function rethemeLights(group, theme, sunDir) {
-  const { sun, hemi, ambient } = group.userData;
+  const { sun, hemi, fill, ambient } = group.userData;
   sun.color.setHex(theme.sun);
   sun.intensity = theme.sunIntensity;
   sun.position.copy(sunDir).multiplyScalar(4200);
   hemi.intensity = theme.hemi;
-  ambient.intensity = theme.sunIntensity < 1.2 ? 0.55 : 0.35;
+
+  // The fill and the ambient are the two lights that decide whether a wall is *white* or *dark*,
+  // and both used to ignore the clock entirely.
+  //
+  // `fill` was constructed at a constant 0.42 and never touched here at all, so a second key light
+  // kept shining from above at 2 a.m.; a town's white plaster walls therefore stayed white however
+  // far the sun went down, and the window glow next to them had nothing to read against. The ambient
+  // had the same bug in a worse form: it *rose* at night (`sunIntensity < 1.2 ? 0.55 : 0.35`) on the
+  // theory that a dark scene needs lifting, which is backwards — it lifted the scene to daylight.
+  //
+  // Both are now scaled by `lightLevel`, the day cycle's own 0..1 measure of how much light there
+  // is, so they fall with the sun instead of ignoring it. The floors are non-zero on purpose: at
+  // 0.10 ambient and 0.06 fill a moonlit wall still has a silhouette and the town reads as *dark*
+  // rather than as a black hole, which is the difference between night and a rendering mistake.
+  const level = theme.lightLevel ?? 1;
+  fill.intensity = 0.06 + level * 0.36;
+  ambient.intensity = 0.10 + level * 0.30;
 }
 
 /**

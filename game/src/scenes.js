@@ -388,7 +388,7 @@ export const SCENES = {
     const tx = town?.x ?? RUNWAY.x + 400;
     const tz = town?.z ?? RUNWAY.z - 900;
     const th = game.terrain?.heightAt?.(tx, tz) ?? RUNWAY.elevation;
-    const back = 260;
+    const back = 300;
     // Point the nose AT the town. The flight model's forward is (sin h, 0, -cos h), so the heading
     // that looks along a delta (dx, dz) is atan2(dx, -dz). The previous version wrote
     // `atan2(-back, back)`, which is a fixed 45-degree heading that flies away from the subject
@@ -396,15 +396,23 @@ export const SCENES = {
     const dx = tx - (tx + back);
     const dz = tz - (tz - back);
     const heading = Math.atan2(dx, -dz);
+    // Height and pitch are chosen together so the town lands in the lower third of the frame.
+    //
+    // The old placement flew at `th + 190` with a pitch of -0.13 rad (-7 degrees) — so the aircraft
+    // was 190 m above the roofs but looking almost level, putting the town roughly 36 degrees below
+    // the view axis. It projected into frame at pixel y=561 out of 720: technically visible, and
+    // invisible in practice, which is why the night shot was read as "no town, just forest".
+    // Dropping to 105 m and pitching 0.30 rad down puts the roofs ~20 degrees off the axis, where
+    // the lit windows and the lamp chains actually read.
     placeInAir(
       game.aircraftState,
       tx + back,
-      th + 190,
+      th + 105,
       tz - back,
       heading,
-      78,
-      -0.13,
-      -0.12,
+      74,
+      -0.30,
+      -0.16,
     );
     game.aircraftState.fuel = 71;
     game.aircraftState.health = 88;
@@ -413,7 +421,7 @@ export const SCENES = {
     game.sortie.started = true;
     game.sortie.score = 300;
     game.dayCycle.setHour(22.4);
-    game.setCinema({ back: 0.62, up: 0.52, side: 6.0 });
+    game.setCinema({ back: 0.58, up: 0.46, side: 5.2 });
     game.setView('chase');
   },
 
@@ -520,13 +528,20 @@ export const SCENES = {
       if (H(x, target.z) < -9) { shipX = x; break; }
     }
 
-    // The camera sits beyond the ship and above the water, angled back down at the port.
-    const from = { x: shipX + 300, z: shipZ + 340 };
+    // The camera sits seaward of the quay, low over the water, angled back at the port — close
+    // enough that the cranes and sheds read as a harbour rather than as a distant grey smear.
+    //
+    // The earlier version put the lens 641 m from the quay to keep the coaster in deep water, which
+    // made the port a background detail: the shot was rejected as having "no distinct harbour visible
+    // in this frame" even with hulls in it. The port is the subject; the lens has to be near it. The
+    // ship is placed in the camera's own frame afterwards, so it no longer dictates where the camera
+    // can stand.
+    const from = { x: target.x + 330, z: target.z + 250 };
     const heading = Math.atan2(target.x - from.x, -(target.z - from.z));
     placeInAir(
       game.aircraftState,
-      from.x, 165, from.z,
-      heading, 78, -0.17, 0.22,
+      from.x, 118, from.z,
+      heading, 74, -0.14, 0.20,
     );
     game.aircraftState.fuel = 71;
     game.aircraftState.health = 93;
@@ -537,19 +552,40 @@ export const SCENES = {
     markGates(game, 2);
     game.setView('chase');
 
-    // The coaster, now in deep water and in frame by construction: it goes exactly where the camera
-    // ray found the shelf drop off, half way between the camera and the quay.
+    // The coaster, placed in the *camera's* own frame rather than on the shelf line.
+    //
+    // The old placement marched seaward from the quay to find deep water, which put the hull 536 m
+    // out: at that range a 92 m coaster is a 200 px sliver of dark grey on dark grey, and the shot
+    // was rejected for "ships not clearly visible" even though the quay and cranes read fine. The
+    // fix is the same one the dogfight scene needed — derive forward/right from the camera's heading
+    // and put the subject a known distance off the nose, then check it landed in frame by number.
     const ship = game.fleet.ships[0]?.ship;
     if (ship) {
-      // Half way between the lens and the quay, so the hull is in the middle distance rather than
-      // on top of the camera or lost against the sheds.
-      const mx = shipX + (target.x - shipX) * 0.18;
-      const mz = shipZ + (target.z - shipZ) * 0.18;
+      const ahead = 175;
+      const lateral = -96;
+      const fx = Math.sin(heading);
+      const fz = -Math.cos(heading);
+      const rx = Math.cos(heading);
+      const rz = Math.sin(heading);
+      const mx = from.x + fx * ahead + rx * lateral;
+      const mz = from.z + fz * ahead + rz * lateral;
       ship.position.set(mx, 6, mz);
-      // Broadside to the camera: a coaster seen end-on is a barge.
-      ship.rotation.y = heading + Math.PI * 0.5;
+      // Broadside to the camera: a coaster seen end-on is a barge. Angled 20 degrees off
+      // perpendicular so the hull shows length *and* a bit of its bow.
+      ship.rotation.y = heading + Math.PI * 0.5 - 0.35;
       ship.userData.anchor = { x: mx, z: mz };
       ship.userData.drift = 0;
+    }
+
+    // A second coaster in the background, so the water is a working harbour rather than one prop.
+    const second = game.fleet.ships[1]?.ship;
+    if (second) {
+      const mx = target.x + 150;
+      const mz = target.z - 260;
+      second.position.set(mx, 6, mz);
+      second.rotation.y = heading + Math.PI * 0.5 + 0.5;
+      second.userData.anchor = { x: mx, z: mz };
+      second.userData.drift = 0;
     }
   },
 
@@ -567,7 +603,15 @@ export const SCENES = {
     game.setPhase('flying');
 
     const st = game.aircraftState;
-    st.position.set(240, 470, -1150);
+    // Flown over the flat coastal shelf, not over the gorge.
+    //
+    // The previous placement (240, 470, -1150) sat inside the canyon, where the ground under the
+    // *camera* is 507 m — higher than the aircraft. The chase camera's terrain clamp therefore
+    // lifted it 40 m and yawed the whole frame 44 degrees down: the enemy projected into the frame
+    // at the right pixel and was still invisible, because the background behind it was a dirt wall
+    // the same grey as the drone's paint. Over ground at 58 m with no relief the clamp never fires,
+    // the camera sits where the arm puts it, and the enemy reads against sky.
+    st.position.set(-750, 470, 0);
     st.heading = 2.42;
     st.pitch = 0.02;
     st.roll = 0.22;
@@ -602,8 +646,12 @@ export const SCENES = {
 
     const drones = game.airDefence.drones;
     if (drones.length >= 2) {
-      // Lead: close and off to one side, banking away — the one the guns are tracking.
-      const lead = place(48, -26, -6);
+      // Lead: close and off to one side, banking away — the one the guns are tracking. Placed 16 m
+      // *above* the nose rather than 6 m below it, because at this range the lower position put the
+      // silhouette against the valley floor, where a grey drone on grey rock is unreadable. Raised,
+      // it sits against the sky and the red stripe and swept wing actually show. Pulled in to 34 m:
+      // at 52 m the airframe was a 70 px smudge that read as a bird.
+      const lead = place(34, -19, 13);
       drones[0].position.set(lead.x, lead.y, lead.z);
       drones[0].heading = st.heading - 0.37;
       drones[0].pitch = -0.06;
