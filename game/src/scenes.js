@@ -371,19 +371,40 @@ export const SCENES = {
    * Night: stars, a moon, and the works burning off. Flown on instruments by the look of it, which
    * is the point — the HUD is what makes a night sortie possible at all.
    */
+  /**
+   * The night sky as an achievement rather than a palette: stars all the way down to the horizon,
+   * a crescent moon, the aircraft's own steady nav lights and strobing tail, and — the thing the
+   * first version was missing — a settlement burning below.
+   *
+   * Framed low over a town on purpose. The old night scene cruised at 1765 ft with the nearest
+   * town 1.1 km off to the side, so the lights were there and invisible; a shot that does not
+   * contain its own subject proves nothing.
+   */
   night(game) {
     game.loadRound(0, { briefing: false });
     markGates(game, 2);
-    const heading = RUNWAY.heading + Math.PI;
+    // The town is the subject, so the aircraft is put right over it, nose down the valley.
+    const town = game.settlements?.towns?.[1] ?? game.settlements?.towns?.[0];
+    const tx = town?.x ?? RUNWAY.x + 400;
+    const tz = town?.z ?? RUNWAY.z - 900;
+    const th = game.terrain?.heightAt?.(tx, tz) ?? RUNWAY.elevation;
+    const back = 260;
+    // Point the nose AT the town. The flight model's forward is (sin h, 0, -cos h), so the heading
+    // that looks along a delta (dx, dz) is atan2(dx, -dz). The previous version wrote
+    // `atan2(-back, back)`, which is a fixed 45-degree heading that flies away from the subject
+    // whatever the town's position is — the reason the town was never in the shot.
+    const dx = tx - (tx + back);
+    const dz = tz - (tz - back);
+    const heading = Math.atan2(dx, -dz);
     placeInAir(
       game.aircraftState,
-      RUNWAY.x - 260,
-      RUNWAY.elevation + 480,
-      RUNWAY.z - 1500,
+      tx + back,
+      th + 190,
+      tz - back,
       heading,
-      82,
-      -0.03,
-      -0.22,
+      78,
+      -0.13,
+      -0.12,
     );
     game.aircraftState.fuel = 71;
     game.aircraftState.health = 88;
@@ -392,7 +413,7 @@ export const SCENES = {
     game.sortie.started = true;
     game.sortie.score = 300;
     game.dayCycle.setHour(22.4);
-    game.setCinema({ back: 0.66, up: 0.62, side: 8.0 });
+    game.setCinema({ back: 0.62, up: 0.52, side: 6.0 });
     game.setView('chase');
   },
 

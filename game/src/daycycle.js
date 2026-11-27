@@ -206,24 +206,31 @@ export function buildStars(count = 1400, radius = 12000) {
   };
   const c = new THREE.Color();
   for (let i = 0; i < count; i += 1) {
-    // Uniform on the upper hemisphere: an even distribution in the plane would bunch at the pole.
+    // A hemisphere. `theta` is measured from the zenith, so the point's height above the horizon is
+    // directly `cos(theta)` — the obvious formula, and the one the first version got wrong by
+    // writing `cos(theta) * 0.5 + 0.5`. That squashed the whole field into the top of the sky: the
+    // lowest star sat at 26 degrees of elevation, so a scene looking anywhere near the horizon was
+    // starless no matter how bright the points were. The fix is one term, and it is the difference
+    // between stars and no stars in every shot that frames the sky the way a pilot actually sees it.
     const u = rnd();
     const v = rnd();
-    const theta = Math.acos(1 - u); // 0 at zenith
+    // u=0 at the zenith, u=1 at the horizon. acos keeps the density even over the cap.
+    const theta = Math.acos(u);
     const phi = v * Math.PI * 2;
-    // Only the top half: stars below the horizon are wasted vertices.
-    const y = Math.cos(theta) * 0.5 + 0.5;
+    const sinT = Math.sin(theta);
     const r = radius;
-    positions[i * 3] = Math.sin(theta) * Math.cos(phi) * r;
-    positions[i * 3 + 1] = y * r;
-    positions[i * 3 + 2] = Math.sin(theta) * Math.sin(phi) * r;
+    positions[i * 3] = sinT * Math.cos(phi) * r;
+    positions[i * 3 + 1] = Math.cos(theta) * r;
+    positions[i * 3 + 2] = sinT * Math.sin(phi) * r;
 
     // Real star colour is mostly white with a blue or orange cast. A few bright ones carry it.
     const t = rnd();
     if (t < 0.12) c.setHex(0xaaccff);
     else if (t < 0.2) c.setHex(0xffddaa);
     else c.setHex(0xffffff);
-    const brightness = 0.45 + rnd() * 0.55;
+    // Brightness is biased low on purpose. A sky where every star is as bright as every other reads
+    // as noise; the eye reads a starfield by a few bright ones and a lot of faint ones.
+    const brightness = 0.35 + Math.pow(rnd(), 2.2) * 0.65;
     colours[i * 3] = c.r * brightness;
     colours[i * 3 + 1] = c.g * brightness;
     colours[i * 3 + 2] = c.b * brightness;
@@ -238,7 +245,7 @@ export function buildStars(count = 1400, radius = 12000) {
     // Sized in PIXELS, not metres. These points sit 12 km out, so with attenuation on they were
     // scaled down to a fraction of a pixel and the night sky rendered starless no matter how high
     // the opacity went. A star is a point source: constant screen size is also the correct look.
-    size: 2.1,
+    size: 2.4,
     sizeAttenuation: false,
     vertexColors: true,
     transparent: true,
@@ -246,6 +253,11 @@ export function buildStars(count = 1400, radius = 12000) {
     depthWrite: false,
     fog: false,
     blending: THREE.AdditiveBlending,
+    // ACES tone mapping, which the renderer uses for everything else, maps a dim additive point
+    // down to nearly zero: a star at luminance 0.5 came out indistinguishable from the sky. Stars
+    // are emissive point sources at a fixed brightness and are exactly the case tone mapping should
+    // not touch, so they opt out. This is what turned a starless sky into a sky with stars.
+    toneMapped: false,
   });
   const points = new THREE.Points(geometry, material);
   points.name = 'stars';

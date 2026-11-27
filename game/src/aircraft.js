@@ -115,6 +115,7 @@ export function buildAircraft() {
   const ailerons = [];
   let navL = null;
   let navR = null;
+  // (nav lights are built at the end of the function, alongside the strobe and the beacon)
   for (const side of [-1, 1]) {
     const panel = buildWingPanel({
       rootChord: 1.95,
@@ -155,15 +156,8 @@ export function buildAircraft() {
     aileronPivot.add(panelAil);
     group.add(aileronPivot);
     ailerons.push({ pivot: aileronPivot, side });
-
-    // Nav light in the wingtip, on a small fairing.
-    const lightMat = side > 0
-      ? new THREE.MeshStandardMaterial({ color: 0xff2b1f, emissive: 0xff2b1f, emissiveIntensity: 4 })
-      : new THREE.MeshStandardMaterial({ color: 0x2bff6a, emissive: 0x2bff6a, emissiveIntensity: 4 });
-    const nav = new THREE.Mesh(new THREE.SphereGeometry(0.13, 8, 6), lightMat);
-    nav.position.set(side * (halfSpan + 0.06), -0.12, 1.10);
-    group.add(nav);
-    if (side > 0) navL = nav; else navR = nav;
+    // The wingtip nav lights are built with the rest of the lighting further down, so this loop
+    // only builds structure. `halfSpan` is still needed for the aileron above.
   }
 
   // Horizontal stabiliser: the same aerofoil at a much smaller scale, so the tail is not a plank.
@@ -247,6 +241,114 @@ export function buildAircraft() {
   tailWheel.position.set(0, -0.72, -4.3);
   group.add(tailWheel);
 
+  // --- The lights a pilot actually flies by.
+  //
+  // The old model had two nav lights and blinked them together, which is wrong in a way that is
+  // obvious from outside: a real aircraft's red and green are *steady*, and it is the white strobe
+  // on the tail and the beacon on the fin that flash. Blinking all of them turns the aircraft into
+  // a Christmas tree and destroys the one thing nav lights are for — telling you which way the
+  // aircraft is pointing at night.
+  //
+  // So: red left, green right, both steady, plus a white tail strobe and a red anti-collision
+  // beacon, both double-flashing on the same 1.2 s cycle the real ones use. Materials are basic and
+  // additive so they read as lights rather than as painted spheres, and each has a halo sprite so
+  // it stays visible at range instead of shrinking to a sub-pixel dot.
+  const haloTexture = (() => {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d');
+    const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    g.addColorStop(0, 'rgba(255,255,255,0.95)');
+    g.addColorStop(0.25, 'rgba(255,255,255,0.42)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(c);
+  })();
+
+  function makeLamp(hex, size, haloScale) {
+    const mat = new THREE.MeshBasicMaterial({
+      color: hex, transparent: true, blending: THREE.AdditiveBlending,
+      depthWrite: false, toneMapped: false,
+    });
+    const bulb = new THREE.Mesh(new THREE.SphereGeometry(size, 8, 6), mat);
+    const halo = new THREE.Sprite(new THREE.SpriteMaterial({
+      map: haloTexture, color: hex, transparent: true,
+      blending: THREE.AdditiveBlending, depthWrite: false, opacity: 0.85, toneMapped: false,
+    }));
+    halo.scale.setScalar(haloScale);
+    return { bulb, halo, mat, haloMat: halo.material };
+  }
+
+  // Steady nav lights, at the wingtips where the old ones were.
+  const navLampL = makeLamp(0xff2b1f, 0.13, 2.0);
+  navLampL.bulb.position.set(+2, -0.12, 1.10);
+  navLampL.halo.position.copy(navLampL.bulb.position);
+  group.add(navLampL.bulb, navLampL.halo);
+
+  const navLampR = makeLamp(0x2bff6a, 0.13, 2.0);
+  navLampR.bulb.position.set(-2, -0.12, 1.10);
+  navLampR.halo.position.copy(navLampR.bulb.position);
+  group.add(navLampR.bulb, navLampR.halo);
+
+  // White tail strobe: two fast flashes then a pause, which is the pattern that reads as a strobe
+  // rather than as a blinking light.
+  const strobe = makeLamp(0xffffff, 0.10, 2.6);
+  strobe.bulb.position.set(0, 0.42, -4.92);
+  strobe.halo.position.copy(strobe.bulb.position);
+  group.add(strobe.bulb, strobe.halo);
+
+  // Red anti-collision beacon on the fin.
+  const beacon = makeLamp(0xff3311, 0.11, 2.2);
+  beacon.bulb.position.set(0, 0.36, -4.35);
+  beacon.halo.position.copy(beacon.bulb.position);
+  group.add(beacon.bulb, beacon.halo);
+
+  // --- Exhaust stacks: two short pipes under the cowl. Unlit, they are almost invisible; when the
+  // pilot is on the boost they show a hot glow, which is the only cue from a chase camera that the
+  // engine is working hard.
+  const exhaustMat = new THREE.MeshBasicMaterial({
+    color: 0xff7722, transparent: true, opacity: 0, blending: THREE.AdditiveBlending,
+    depthWrite: false, toneMapped: false,
+  });
+  for (const side of [-1, 1]) {
+    const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.09, 0.34, 6), dark);
+    pipe.rotation.x = Math.PI * 0.5;
+    pipe.position.set(side * 0.52, -0.30, 3.95);
+    group.add(pipe);
+    const glow = new THREE.Mesh(new THREE.ConeGeometry(0.10, 0.55, 6), exhaustMat);
+    glow.rotation.x = -Math.PI * 0.5;
+    glow.position.set(side * 0.52, -0.30, 3.68);
+    group.add(glow);
+  }
+
   group.scale.setScalar(1.0);
-  return { group, propHub, disc, ailerons, elevatorPivot, rudderPivot, navL, navR };
+  return {
+    group, propHub, disc, ailerons, elevatorPivot, rudderPivot,
+    lights: { navLampL, navLampR, strobe, beacon },
+    exhaustMat,
+    /**
+     * The light show, as a function of time and how hard the engine is working.
+     *
+     * `boost` is 0..1: it lifts the exhaust glow from nothing to a visible cone and brightens the
+     * strobe halo a little, so a pilot on the burner sees their own aircraft lit up.
+     */
+    update(time, boost = 0) {
+      // Strobe and beacon: a 1.2 s cycle with two short flashes in the first fifth of it, which is
+      // the standard double-flash transport pattern and reads at a glance as aviation lighting.
+      const c = (time / 1.2) % 1;
+      const flash = c < 0.06 || (c > 0.13 && c < 0.19);
+      strobe.bulb.visible = flash;
+      strobe.halo.visible = flash;
+      beacon.bulb.visible = flash;
+      beacon.halo.visible = flash;
+      // Nav lights are steady, always. Their halo does breathe slightly with the boost because the
+      // electrical bus is being loaded, which is a detail nobody will name but everybody sees.
+      navLampL.halo.scale.setScalar(2.0 + boost * 0.25);
+      navLampR.halo.scale.setScalar(2.0 + boost * 0.25);
+      // Exhaust: scales with boost and never quite goes out, because an idling engine still glows.
+      exhaustMat.opacity = 0.05 + boost * 0.85;
+    },
+  };
 }

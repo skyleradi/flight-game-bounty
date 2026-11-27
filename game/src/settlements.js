@@ -225,9 +225,25 @@ function buildTownGeometry(houses, { church = false, glow = null } = {}) {
           // Not every room is occupied: a house with all its windows lit reads as a light box.
           if (h.warm[k % h.warm.length] === null) continue;
           const lx = (k - (n - 1) / 2) * pitch;
-          const wx = h.x + lx * ca;
-          const wz = h.z - lx * sa;
-          glow.push(paint(box(1.55, 0.86, h.d + 0.14, wx, y, wz, h.rot), h.warm[k % h.warm.length]));
+          // A thin plate proud of each long wall, rather than a slab driven through the house. The
+          // first version used a box of depth `h.d + 0.14`, which protrudes 7 cm past the facade —
+          // at 400 m that is a fifth of a pixel, so the depth test ate it and the town stayed dark
+          // however bright the material was. These sit 14 cm outside the wall, clear of the dark
+          // window band, which is unambiguous at any distance.
+          //
+          // The offset is applied in the house's own frame, because `box` rotates before it
+          // translates: a local (lx, 0, z0) lands at world (lx·cos + z0·sin, -lx·sin + z0·cos).
+          // Adding `0.14` to world z instead would push the plate along the wrong axis on any house
+          // whose street does not run north-south.
+          for (const side of [-1, 1]) {
+            const z0 = side * (h.d * 0.5 + 0.14);
+            const px = h.x + lx * ca + z0 * sa;
+            const pz = h.z - lx * sa + z0 * ca;
+            glow.push(paint(
+              box(2.0, 1.15, 0.16, px, y, pz, h.rot),
+              h.warm[k % h.warm.length],
+            ));
+          }
         }
       }
     }

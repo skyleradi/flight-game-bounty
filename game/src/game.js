@@ -604,9 +604,9 @@ export function createGame({ canvas, hudCanvas }) {
     aircraft.elevatorPivot.rotation.x = (controls.pitch + controls.mouseDeltaY * -0.01) * 0.26;
     aircraft.rudderPivot.rotation.y = (controls.yaw + controls.roll * 0.28) * 0.3;
 
-    const blink = (sortie.time * 1.15) % 1 > 0.5;
-    aircraft.navL.visible = blink;
-    aircraft.navR.visible = blink;
+    // The aircraft's own lighting. Boost is the spool, not the key: it ramps in and out over about
+    // a second, so the exhaust glow flares with the engine rather than snapping on with the input.
+    aircraft.update(sortie.time, aircraftState.boostSpool ?? 0);
   }
 
   // --- One fixed simulation step: input, physics, mission, presentation.
