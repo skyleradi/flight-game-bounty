@@ -1,0 +1,12 @@
+import { chromium } from 'playwright';
+const b = await chromium.launch({ executablePath:'/root/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome', args:['--use-gl=angle','--use-angle=swiftshader','--enable-unsafe-swiftshader','--no-sandbox']});
+const p = await b.newPage({viewport:{width:1280,height:720}});
+const errs=[];
+p.on('pageerror',e=>errs.push('PAGEERROR: '+e.message+'\n'+(e.stack||'').split('\n').slice(0,4).join('\n')));
+p.on('console',m=>{ if(m.type()==='error') errs.push('CONSOLE: '+m.text()); });
+await p.goto('http://localhost:8080/', {waitUntil:'load', timeout:60000});
+await p.waitForTimeout(6000);
+const st = await p.evaluate(()=>({flight: typeof window.__flight, ui: typeof window.__ui, title: document.getElementById('title')?.className}));
+console.log(JSON.stringify(st));
+console.log(errs.join('\n---\n'));
+await b.close();

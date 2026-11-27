@@ -20,6 +20,7 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { RUNWAY, PALETTE } from './config.js';
+import { runwayFrame } from './physics.js';
 
 /**
  * A cheap deterministic RNG, seeded so the same valley always grows the same obstacles: a course
@@ -215,16 +216,18 @@ function buildTurbine(height) {
  * through, which is the difference between an obstacle course and a wall across the finish line.
  */
 function isClear(x, z, y, minClearance, gates) {
-  // The runway and its extended centreline: a mast in the approach path is not a challenge, it is
-  // a scripted crash on the first attempt.
-  const dx = x - RUNWAY.x;
-  const dz = z - RUNWAY.z;
-  const s = Math.sin(RUNWAY.heading);
-  const co = Math.cos(RUNWAY.heading);
-  const along = dx * s + dz * co;
-  const across = dx * co - dz * s;
-  const onCentre = Math.abs(across) < RUNWAY.width * 1.6;
-  const inApproach = along > -RUNWAY.length * 0.9 && along < RUNWAY.length * 1.15;
+  // The runway and both of its extended centrelines: an obstacle in the approach or departure path
+  // is not a challenge, it is a scripted crash.
+  //
+  // This used to compute the frame inline with `dx * sin(h) + dz * cos(h)` for "along", which is
+  // not the runway frame at all: at a point 1.2 km down the centreline it reported 442 m of lateral
+  // offset, so nothing was ever excluded except the exact centre point. Two rock spires ended up
+  // standing on the strip. runwayFrame() is the one definition of this geometry; use it.
+  const { along, across } = runwayFrame(x, z);
+  const onCentre = Math.abs(across) < RUNWAY.width * 1.2;
+  // Cover the whole strip plus a generous run-out in BOTH directions, because the approach can be
+  // flown from either end depending on which way the terrain lets an aircraft in.
+  const inApproach = Math.abs(along) < RUNWAY.length * 1.4;
   if (onCentre && inApproach) return false;
 
   // Nothing within a gate's ring plus a margin: the player is aiming there at speed.

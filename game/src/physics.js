@@ -42,18 +42,28 @@ export function emptyControls() {
  * cruise and stiffening above it. This one curve is what makes the aircraft feel heavy at the top
  * of the envelope and sloppy near the bottom.
  */
-function authority(speed) {
-  if (speed <= AIRCRAFT.stall) return Math.max(0, speed / AIRCRAFT.stall) * 0.35;
-  if (speed >= AIRCRAFT.cruise) {
-    const over = speed - AIRCRAFT.cruise;
-    return Math.max(0.45, 1 - over * AIRCRAFT.stiffening);
+function authority(speed, spec = AIRCRAFT) {
+  if (speed <= spec.stall) return Math.max(0, speed / spec.stall) * 0.35;
+  if (speed >= spec.cruise) {
+    const over = speed - spec.cruise;
+    return Math.max(0.45, 1 - over * spec.stiffening);
   }
-  return 0.35 + 0.65 * ((speed - AIRCRAFT.stall) / (AIRCRAFT.cruise - AIRCRAFT.stall));
+  return 0.35 + 0.65 * ((speed - spec.stall) / (spec.cruise - spec.stall));
+}
+
+/**
+ * The aircraft the pilot is actually flying: the stock airframe, or the one the kit has bought.
+ * Every number the model uses goes through here, so an upgrade that only moved a menu label would
+ * be impossible — there is no other path to these figures.
+ */
+function specOf(state) {
+  return state.spec ?? AIRCRAFT;
 }
 
 /** The stall speed with `flaps` notches out: the wing keeps flying a little slower. */
 export function stallSpeed(state) {
-  return AIRCRAFT.stall * (1 - AIRCRAFT.flapStallRelief * (state.flaps ?? 0));
+  const s = specOf(state);
+  return s.stall * (1 - s.flapStallRelief * (state.flaps ?? 0));
 }
 
 /**
@@ -112,19 +122,22 @@ export function stepAircraft(state, controls, dt = STEP) {
   const events = [];
   if (state.destroyed) return events;
 
+  // The airframe in the air: stock, or the one the kit bought. Read once per step so a purchase
+  // mid-sortie cannot change the aircraft underneath a running simulation.
+  const spec = specOf(state);
   const stalling = stallSpeed(state);
 
   // --- Throttle: the lever moves toward what the pilot asks and never snaps there.
   state.throttle = Math.min(1, Math.max(0, state.throttle + controls.throttle * dt * 0.85));
 
   const fuelLeft = state.fuel > 0;
-  const baseThrust = fuelLeft ? AIRCRAFT.maxThrust * state.throttle : 0;
+  const baseThrust = fuelLeft ? spec.maxThrust * state.throttle : 0;
 
   // --- Afterburner. The charge is a real resource: it burns while lit and refills slowly, so the
   // pilot has to decide which straight to spend it on. The spool makes it a shove rather than a
   // step — a boost that arrives instantly reads as a bug, and one that winds up over about a
   // fifth of a second reads as thrust.
-  const boostCfg = AIRCRAFT.boost;
+  const boostCfg = spec.boost;
   state.boost = state.boost ?? 0;
   const wantBoost = !!controls.boost && state.boost > 0.02 && fuelLeft;
   const spoolTarget = wantBoost ? 1 : 0;
@@ -159,8 +172,8 @@ export function stepAircraft(state, controls, dt = STEP) {
   // --- Energy. Drag rises with the square of the airspeed and flaps add to it; gravity takes its
   // cut of any climb. The climb angle here is the nose's, which is what the pilot commands.
   const climbSin = Math.sin(state.pitch);
-  const gravity = 9.81 * AIRCRAFT.climbCost * climbSin;
-  const drag = (AIRCRAFT.drag + AIRCRAFT.flapDrag * state.flaps * 0.0013) * state.speed * state.speed;
+  const gravity = 9.81 * spec.climbCost * climbSin;
+  const drag = (spec.drag + spec.flapDrag * state.flaps * 0.0013) * state.speed * state.speed;
   let accel = thrust - drag - gravity;
 
   // The wind's component along the nose changes the airspeed the wing sees without changing the
@@ -180,11 +193,11 @@ export function stepAircraft(state, controls, dt = STEP) {
   // The boost lifts the never-exceed speed as well as the thrust, which is what makes it read as
   // speed rather than as acceleration: on a long straight the aircraft pulls away from the course,
   // and on a dive the extra ceiling is the difference between a fast line and a bent one.
-  state.speed = Math.max(0, Math.min(AIRCRAFT.vne + boostCfg.overspeed * lit, state.speed + accel * dt));
+  state.speed = Math.max(0, Math.min(spec.vne + boostCfg.overspeed * lit, state.speed + accel * dt));
   state.airspeed = airspeed;
 
   // --- Control authority falls away with airspeed, so the aircraft must be flown to be steered.
-  const auth = authority(airspeed);
+  const auth = authority(airspeed, spec);
   const airborne = !state.wheelsDown;
   const pitchAuth = airborne ? auth : auth * 0.12;
   const rollAuth = airborne ? auth : 0.0;
@@ -193,7 +206,7 @@ export function stepAircraft(state, controls, dt = STEP) {
   const mouseRoll = controls.mouseDeltaX * 0.0026;
 
   // --- Pitch: the stick, plus the wing's own tendency to drop its nose when it stops flying.
-  let pitchRate = (controls.pitch + mousePitch) * AIRCRAFT.pitchRate * pitchAuth;
+  let pitchRate = (controls.pitch + mousePitch) * spec.pitchRate * pitchAuth;
   if (airspeed < stalling && airborne) {
     pitchRate -= 0.9 * (1 - airspeed / stalling);
     events.push({ type: 'stall' });
@@ -202,7 +215,7 @@ export function stepAircraft(state, controls, dt = STEP) {
 
   // --- Roll and bank. The ailerons roll; the wing's dihedral rolls back toward level slowly, and
   // turbulence rocks the wings on top of that.
-  let rollRate = (controls.roll + mouseRoll) * AIRCRAFT.rollRate * rollAuth;
+  let rollRate = (controls.roll + mouseRoll) * spec.rollRate * rollAuth;
   if (airborne) rollRate -= state.bank * 0.55;
   rollRate += g.roll;
   state.bank = Math.max(-1.35, Math.min(1.35, state.bank + rollRate * dt));
@@ -210,9 +223,9 @@ export function stepAircraft(state, controls, dt = STEP) {
   // --- Turn: a banked wing turns the aircraft, and the turn is coordinated with the rudder.
   if (airborne) {
     // Turn rate scales with airspeed, so a headwind leg turns a little tighter than a tailwind one.
-    const turnRate = Math.sin(state.bank) * AIRCRAFT.coordination * (airspeed / AIRCRAFT.cruise);
+    const turnRate = Math.sin(state.bank) * spec.coordination * (airspeed / spec.cruise);
     state.heading += turnRate * dt;
-    state.heading += controls.yaw * AIRCRAFT.yawRate * auth * dt;
+    state.heading += controls.yaw * spec.yawRate * auth * dt;
     // A crosswind weathervanes the nose away from the wind: this is what the rudder is for.
     state.heading += (airX * Math.cos(state.heading) + airZ * Math.sin(state.heading)) * 0.0009 * dt;
   } else if (state.speed > 1) {
@@ -223,8 +236,8 @@ export function stepAircraft(state, controls, dt = STEP) {
   // --- Vertical: the nose's climb angle sets the vertical speed, and a slow aircraft sinks.
   let climb = Math.sin(state.pitch) * state.speed;
   // Flaps carry the aircraft when the wing is slow, which is why they are the short-field tool.
-  if (airborne && state.flaps > 0 && airspeed < AIRCRAFT.cruise) {
-    climb += AIRCRAFT.flapSupport * state.flaps * 0.5 * (1 - airspeed / AIRCRAFT.cruise) * 0.35;
+  if (airborne && state.flaps > 0 && airspeed < spec.cruise) {
+    climb += spec.flapSupport * state.flaps * 0.5 * (1 - airspeed / spec.cruise) * 0.35;
   }
   if (airspeed < stalling && airborne) {
     const lift = airspeed / stalling;
@@ -257,8 +270,8 @@ export function stepAircraft(state, controls, dt = STEP) {
   if (fuelLeft) {
     // Afterburner drinks fuel three times over, which is the second half of its cost: a boost
     // that is free fuel-wise is a boost the pilot holds down for the whole course.
-    const burn = AIRCRAFT.fuelBurn * (AIRCRAFT.idleBurn + (1 - AIRCRAFT.idleBurn) * state.throttle)
-      * (1 + (AIRCRAFT.boost.burn - 1) * lit);
+    const burn = spec.fuelBurn * (spec.idleBurn + (1 - spec.idleBurn) * state.throttle)
+      * (1 + (spec.boost.burn - 1) * lit);
     const before = state.fuel;
     state.fuel = Math.max(0, state.fuel - burn * dt);
     if (before > 0 && state.fuel <= 0) events.push({ type: 'flameout' });
@@ -276,7 +289,7 @@ export function stepAircraft(state, controls, dt = STEP) {
       // to take it out with the rudder before the wheels touch.
       const sink = -climb;
       const banked = Math.abs(state.bank);
-      const fast = Math.max(0, state.speed - AIRCRAFT.cruise * 0.75);
+      const fast = Math.max(0, state.speed - spec.cruise * 0.75);
       // Drift is the difference between where the nose points and where the aircraft is going.
       const velocityAngle = Math.atan2(
         forwardX * state.speed - airX * 0.0,
@@ -287,8 +300,8 @@ export function stepAircraft(state, controls, dt = STEP) {
       // Sideways travel over the runway is what the tyre actually feels.
       const sideSlip = Math.abs(Math.sin(state.heading)) * 0 + drift * state.speed * 0.05;
       const crosswind = Math.abs(airX * Math.cos(state.heading) + airZ * Math.sin(state.heading));
-      const windDamage = crosswind > AIRCRAFT.crosswindLimit
-        ? (crosswind - AIRCRAFT.crosswindLimit) * 1.7
+      const windDamage = crosswind > spec.crosswindLimit
+        ? (crosswind - spec.crosswindLimit) * 1.7
         : 0;
 
       const damage = Math.max(0, sink - 3.2) * 3.4 + banked * 16 + fast * 0.42
@@ -363,8 +376,8 @@ export function resetToRunway(state) {
   state.climb = 0;
   state.throttle = 0;
   state.flaps = 0;
-  state.fuel = AIRCRAFT.fuel;
-  state.health = AIRCRAFT.health;
+  state.fuel = (state.spec ?? AIRCRAFT).fuel;
+  state.health = (state.spec ?? AIRCRAFT).health;
   state.boost = 1;
   state.boostSpool = 0;
   state.onGround = true;

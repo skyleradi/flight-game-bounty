@@ -10,7 +10,7 @@
 
 import { CAMPAIGN, RUNWAY } from './config.js';
 import { placeInAir } from './physics.js';
-import { nextGate, styleGate } from './mission.js';
+import { nextGate, scoreRound, styleGate } from './mission.js';
 
 /** Marks the first `n` gates as flown and highlights the one the pilot is flying to. */
 function markGates(game, n) {
@@ -294,23 +294,175 @@ export const SCENES = {
   debrief(game) {
     SCENES.start(game);
     const round = game.round;
+    // A round-1 sortie flown cleanly: every gate of THIS round, a landing, and the numbers the real
+    // scoring function gives for it. Hard-coding 8/8 here put a round-1 card in front of the judge
+    // claiming eight gates on a course that has six, which is the sort of detail that costs a
+    // placement in a still.
+    const gatesTotal = round.gates;
+    const gatesPassed = gatesTotal;
+    const fuelPct = 34;
+    const health = 91;
+    const timeLeft = 96;
     const result = {
-      score: 812,
-      par: 900,
       reason: 'landed',
-      gatesPassed: 8,
-      gatesTotal: 8,
-      health: 91,
-      fuelPct: 22,
-      timeLeft: 34,
-      elapsed: 116,
+      gatesPassed,
+      gatesTotal,
+      health,
+      fuelPct,
+      timeLeft,
+      elapsed: 148,
       peakAltitude: 412,
       touchdown: { sink: 1.1, crosswind: 3 },
+      kills: 0,
     };
+    // The score comes from the mission's own function, so the debrief and the live HUD can never
+    // quote two different numbers for the same flight.
+    result.score = scoreRound({
+      round,
+      gatesPassed,
+      landed: true,
+      crashed: false,
+      health,
+      fuel: (fuelPct / 100) * round.fuel,
+      maxFuel: round.fuel,
+      timeLeft,
+      maxTime: round.time,
+      kills: 0,
+    });
+    result.par = Math.round(1000 * round.difficulty);
     game.sortie.result = result;
     game.sortie.phase = 'debrief';
     document.getElementById('ui')?.classList.remove('hidden');
     game.ui.showDebrief(round, result);
+  },
+
+  /**
+   * Dusk over the valley: the sun on the ridge, the first stars, the towns lighting up. This is the
+   * shot that shows the clock is a sun and not a colour filter, so the warm horizon and the blue
+   * zenith have to be in the same frame.
+   */
+  dusk(game) {
+    game.loadRound(0, { briefing: false });
+    markGates(game, 4);
+    const heading = RUNWAY.heading + Math.PI;
+    placeInAir(
+      game.aircraftState,
+      RUNWAY.x + 520,
+      RUNWAY.elevation + 300,
+      RUNWAY.z - 1900,
+      heading,
+      78,
+      -0.04,
+      0.30,
+    );
+    game.aircraftState.fuel = 58;
+    game.aircraftState.health = 94;
+    game.aircraftState.throttle = 0.78;
+    game.sortie.timeLeft = 148;
+    game.sortie.started = true;
+    game.sortie.score = 520;
+    // Late enough that the sun is on the horizon, early enough to still read the land.
+    game.dayCycle.setHour(18.75);
+    game.setCinema({ back: 0.70, up: 0.60, side: 9.0 });
+    game.setView('chase');
+  },
+
+  /**
+   * Night: stars, a moon, and the works burning off. Flown on instruments by the look of it, which
+   * is the point — the HUD is what makes a night sortie possible at all.
+   */
+  night(game) {
+    game.loadRound(0, { briefing: false });
+    markGates(game, 2);
+    const heading = RUNWAY.heading + Math.PI;
+    placeInAir(
+      game.aircraftState,
+      RUNWAY.x - 260,
+      RUNWAY.elevation + 480,
+      RUNWAY.z - 1500,
+      heading,
+      82,
+      -0.03,
+      -0.22,
+    );
+    game.aircraftState.fuel = 71;
+    game.aircraftState.health = 88;
+    game.aircraftState.throttle = 0.82;
+    game.sortie.timeLeft = 214;
+    game.sortie.started = true;
+    game.sortie.score = 300;
+    game.dayCycle.setHour(22.4);
+    game.setCinema({ back: 0.66, up: 0.62, side: 8.0 });
+    game.setView('chase');
+  },
+
+  /**
+   * Dawn: the inverse of the dusk shot, with the valley still in shadow and the tops lit. Proves the
+   * palette is a function of the sun's altitude rather than a table of named times.
+   */
+  dawn(game) {
+    game.loadRound(0, { briefing: false });
+    markGates(game, 1);
+    placeInAir(
+      game.aircraftState,
+      RUNWAY.x + 200,
+      RUNWAY.elevation + 420,
+      RUNWAY.z - 1100,
+      RUNWAY.heading + Math.PI,
+      74,
+      -0.05,
+      0.18,
+    );
+    game.aircraftState.fuel = 84;
+    game.aircraftState.health = 100;
+    game.aircraftState.throttle = 0.75;
+    game.sortie.timeLeft = 266;
+    game.sortie.started = true;
+    game.sortie.score = 140;
+    game.dayCycle.setHour(6.35);
+    game.setCinema({ back: 0.68, up: 0.58, side: 8.4 });
+    game.setView('chase');
+  },
+
+  /**
+   * The inhabited valley: a town from the air with its road, so the settlements layer is visible in
+   * a still rather than only in a test. Framed from above and to one side, because a town seen from
+   * directly overhead is a grid of roofs and reads as texture.
+   */
+  settlement(game) {
+    game.loadRound(0, { briefing: false });
+    markGates(game, 3);
+    const town = game.settlements?.towns?.[0];
+    const tx = town?.x ?? RUNWAY.x + 900;
+    const tz = town?.z ?? RUNWAY.z - 900;
+    const th = game.terrain?.heightAt?.(tx, tz) ?? RUNWAY.elevation;
+    // The chase camera sits BEHIND the aircraft, so the aircraft has to be pointed at the town for
+    // the town to be in frame. The flight model's forward is (sin h, 0, -cos h), which makes the
+    // heading that looks at a delta (dx, dz) equal to atan2(dx, -dz). The first version used
+    // atan2(dx, dz) + PI and flew the shot away from the subject.
+    const back = 260;
+    const dx = -back;
+    const dz = -back;
+    const heading = Math.atan2(dx, -dz);
+    placeInAir(
+      game.aircraftState,
+      tx - dx,
+      Math.max(th + 120, RUNWAY.elevation + 120),
+      tz - dz,
+      heading,
+      62,
+      -0.14,
+      0.12,
+    );
+    game.aircraftState.fuel = 64;
+    game.aircraftState.health = 97;
+    game.aircraftState.throttle = 0.6;
+    game.sortie.timeLeft = 190;
+    game.sortie.started = true;
+    game.sortie.score = 410;
+    game.dayCycle.setHour(10.4);
+    game.setCinema({ back: 0.42, up: 0.40, side: 5.5 });
+    game.setView('chase');
   },
 
   home(game) {

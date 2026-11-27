@@ -86,6 +86,8 @@ export function createHud(canvas) {
       drawCombatBlock(width - 190, height - 122 - 70 * scale, d, scale);
     }
     drawRoundStrip(20, cockpit ? 132 : 20, d, scale);
+    drawAutopilotStrip(20, cockpit ? 190 : 78, d, scale);
+    drawSalvageMarker(cx, cy, d, scale);
     drawThreatWarning(cx, cy, d, scale);
     drawDamageVignette(d);
 
@@ -145,6 +147,75 @@ export function createHud(canvas) {
     }
     text('SCORE', x + 10, y + 80, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
     text(String(Math.round(d.score ?? 0)), x + w - 10, y + 80, 14, 'right', 'rgba(255, 236, 176, 0.98)', 700);
+  }
+
+  /**
+   * The autopilot strip: the mode, what it is doing, and the bank of credits the salvage is going
+   * into. It only draws while something is worth saying — an empty panel on a clean screen is noise.
+   */
+  function drawAutopilotStrip(x, y, d, scale = 1) {
+    const mode = d.autopilot ?? 'off';
+    const credits = Math.round(d.credits ?? 0);
+    if (mode === 'off' && !credits) return;
+
+    const w = 244 * scale, h = mode === 'off' ? 22 * scale : 40 * scale;
+    panel(x, y, w, h, 0.46);
+
+    if (mode !== 'off') {
+      const label = mode === 'hold' ? 'HOLD' : mode === 'course' ? 'COURSE' : 'APPROACH';
+      text('AUTOPILOT', x + 12, y + 12, 8.5, 'left', 'rgba(150, 195, 215, 0.85)', 600);
+      text(label, x + 92, y + 12, 9.5, 'left', 'rgba(140, 235, 200, 0.98)', 700);
+      text(d.autopilotPhase ?? '', x + 12, y + 27, 9, 'left', 'rgba(200, 235, 245, 0.85)', 500);
+      // A small dot that pulses, so an engaged autopilot is obvious at a glance.
+      const pulse = 0.55 + 0.45 * Math.sin((d.timeLeft ?? 0) * 2.4);
+      ctx.fillStyle = `rgba(120, 240, 190, ${pulse})`;
+      ctx.beginPath();
+      ctx.arc(x + w - 12, y + 12, 3.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    text('SALVAGE', x + 12, y + h - 8, 8.5, 'left', 'rgba(150, 195, 215, 0.85)', 600);
+    text(`${Math.round(d.credits ?? 0)} cr`, x + w - 12, y + h - 8, 10, 'right',
+      'rgba(255, 226, 150, 0.98)', 700);
+    if (d.picked) {
+      text(`+${d.picked} this sortie`, x + 78, y + h - 8, 8.5, 'left',
+        'rgba(180, 220, 235, 0.75)', 500);
+    }
+  }
+
+  /**
+   * The salvage marker: a small chevron in the frame's edge pointing at the nearest can, with its
+   * kind and range. A can that is off-screen with no marker is a can the pilot will never find.
+   */
+  function drawSalvageMarker(cx, cy, d, scale = 1) {
+    const p = d.nearestPickup;
+    if (!p) return;
+    const rel = p.bearing - Math.PI / 2;
+    const r = Math.min(width, height) * 0.30;
+    const px = cx + Math.cos(rel) * r;
+    const py = cy + Math.sin(rel) * r * 0.62;
+
+    const color = p.kind === 'fuel' ? 'rgba(255, 194, 77, 0.9)'
+      : p.kind === 'repair' ? 'rgba(110, 240, 184, 0.9)'
+      : p.kind === 'boost' ? 'rgba(143, 208, 255, 0.9)'
+      : 'rgba(255, 226, 122, 0.9)';
+
+    ctx.save();
+    ctx.translate(px, py);
+    ctx.rotate(rel + Math.PI / 2);
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(0, -5.5);
+    ctx.lineTo(5, 4);
+    ctx.lineTo(-5, 4);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+
+    const label = p.kind === 'fuel' ? 'FUEL' : p.kind === 'repair' ? 'REPAIR'
+      : p.kind === 'boost' ? 'BOOST' : 'SALVAGE';
+    const dist = p.distance > 1000 ? `${(p.distance / 1000).toFixed(1)} km` : `${Math.round(p.distance)} m`;
+    text(`${label} ${dist}`, px, py + 16, 9, 'center', color, 600);
   }
 
   /** The attitude indicator: sky and ground rotating with the aircraft, with a bank scale. */

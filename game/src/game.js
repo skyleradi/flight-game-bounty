@@ -26,11 +26,18 @@ import {
   nextGate, recordRound, saveProgress, scoreRound, styleGate,
 } from './mission.js';
 import { createHud } from './hud.js';
+import { createAutopilot } from './autopilot.js';
+import {
+  PICKUPS as PICKUP_SPECS, applyPickup, aircraftWithKit, buildPickupMeshes, checkPickups, loadKit,
+  planPickups, roundPurse, saveKit,
+} from './kit.js';
 import { createInput, KEY_HELP } from './input.js';
 import {
   applyFog, buildClouds, buildEnvironment, buildLights, buildRain, buildSky, buildSun,
   installAtmosphericHaze, rethemeLights,
 } from './sky.js';
+import { buildSettlements } from './settlements.js';
+import { buildStars, buildMoon, createDayCycle, paletteFor } from './daycycle.js';
 
 const MPS_TO_KNOTS = 1.94384;
 const M_TO_FEET = 3.28084;
@@ -81,9 +88,20 @@ export function createGame({ canvas, hudCanvas }) {
   scene.add(airfield);
   scene.add(buildApproachMarkers());
 
+  // --- The inhabited layer: towns, roads, the works, the harbour. Built from the same heightfield
+  // the rest of the world sits on, so nothing floats and nothing sinks.
+  const settlements = buildSettlements(terrain);
+  scene.add(settlements.group);
+
   let gates = buildCourse(terrain, round);
   let gateVisuals = buildGateMeshes(gates, round.radius);
   scene.add(gateVisuals.group);
+
+  // The salvage cans strung between the gates. Off the racing line on purpose: collecting one costs
+  // a deviation, which is the point.
+  let pickups = planPickups(round, gates);
+  let pickupVisuals = buildPickupMeshes(pickups);
+  scene.add(pickupVisuals.group);
 
   const cloudDeck = round.course.clearance.base / 140;
   let clouds = buildClouds({
@@ -104,6 +122,21 @@ export function createGame({ canvas, hudCanvas }) {
   let obstacles = buildObstacles(terrain, round, gates);
   scene.add(obstacles.group);
   haze.patchObject(obstacles.group);
+  haze.patchObject(settlements.group);
+
+  // --- Night sky. Stars and a moon on the same far dome as the sun, hidden by day and faded in as
+  // the sun goes down. Both ride the day cycle, so raising the hour is the only thing needed to
+  // turn a daylight sortie into a night one.
+  const stars = buildStars();
+  scene.add(stars);
+  const moon = buildMoon();
+  scene.add(moon);
+
+  const dayCycle = createDayCycle({
+    hour: round.hour ?? 9.0,
+    sun, moon, stars, sky, lights, haze, scene,
+  });
+  dayCycle.setBase(round.sky);
 
   // The air defence belongs to the round, like the obstacles: it is rebuilt when the round changes,
   // because the count of guns is part of what makes the later sorties hard.
@@ -130,7 +163,17 @@ export function createGame({ canvas, hudCanvas }) {
   aircraftState.turbulence = round.turbulence;
   resetToRunway(aircraftState);
 
+  // --- The kit the pilot has earned, and the airframe it buys. The state carries the spec, so the
+  // flight model reads the bought numbers without knowing a shop exists.
+  let kit = loadKit();
+  aircraftState.spec = aircraftWithKit(kit);
+
+  const autopilot = createAutopilot();
+
   const hud = createHud(hudCanvas);
+  // main.js injects the overlay after both are built. Kept as a local as well as on the returned
+  // handle: drawHud runs every frame and needs to know whether a card is covering the screen.
+  let titleUi = null;
   const input = createInput(canvas);
   let progress = loadProgress();
 
@@ -161,6 +204,13 @@ export function createGame({ canvas, hudCanvas }) {
     hitFlash: 0,
     /** True while the trigger is down, for the HUD's gun readout. */
     firing: false,
+    /** Salvage collected this sortie, by kind, and the credits it was worth. */
+    picked: 0,
+    pickupCredits: 0,
+    /** Set when the autopilot is flying, so the HUD can say whose hands are on the stick. */
+    autopilot: 'off',
+    /** The last thing the autopilot did, in one line. */
+    autopilotPhase: '',
   };
 
   let view = 'chase';
@@ -211,6 +261,14 @@ export function createGame({ canvas, hudCanvas }) {
     scene.add(gateVisuals.group);
     haze.patchObject(gateVisuals.group);
 
+    // The cans are placed against the course, so a new course needs a new set.
+    scene.remove(pickupVisuals.group);
+    pickupVisuals.dispose();
+    pickups = planPickups(round, gates);
+    pickupVisuals = buildPickupMeshes(pickups);
+    scene.add(pickupVisuals.group);
+    haze.patchObject(pickupVisuals.group);
+
     // Obstacles belong to the round, not the world: their placement is keyed to the gate
     // positions, so a new course needs a new set or a spire ends up standing in a ring.
     scene.remove(obstacles.group);
@@ -225,16 +283,15 @@ export function createGame({ canvas, hudCanvas }) {
     airDefence.dispose();
     airDefence = createAirDefence({ scene, terrain, round, haze });
 
-    // Sky, sun, lights and haze.
-    sky.userData.repaint(round.sky);
-    sun.retheme(round.sky);
-    rethemeLights(lights, round.sky, sun.direction);
-    applyFog(scene, { ...round.sky, visibility: round.visibility });
-    haze.retheme(round.sky, sun.direction);
+    // Sky, sun, lights and haze, then the clock on top: the round sets the weather and the hour,
+    // and the day cycle is what turns those into a sun position, a palette and a star field.
+    dayCycle.setHour(round.hour ?? 9.0);
+    dayCycle.setBase(round.sky);
+    applyFog(scene, { ...dayCycle.theme(), visibility: round.visibility });
     // The probe is repainted with the round: a golden-hour sortie reflects a warm horizon, the
     // storm reflects a grey deck. Baking is a single offscreen pass, so a round change can afford it.
     scene.environment?.dispose();
-    scene.environment = buildEnvironment(renderer, round.sky);
+    scene.environment = buildEnvironment(renderer, dayCycle.theme());
 
     // Cloud and rain.
     scene.remove(clouds.group);
@@ -252,9 +309,11 @@ export function createGame({ canvas, hudCanvas }) {
     // The aircraft's air, and its book.
     aircraftState.wind = windVector(round.wind.from, round.wind.speed);
     aircraftState.turbulence = round.turbulence;
-    aircraftState.fuel = round.fuel;
+    // The bought airframe, refitted for the round: a bigger tank holds more of the round's fuel.
+    aircraftState.spec = aircraftWithKit(kit);
     resetToRunway(aircraftState);
-    aircraftState.fuel = round.fuel;
+    aircraftState.fuel = round.fuel * (aircraftState.spec.fuel / AIRCRAFT.fuel);
+    aircraftState.health = aircraftState.spec.health;
 
     sortie.phase = briefing ? 'briefing' : 'flying';
     sortie.timeLeft = round.time;
@@ -276,6 +335,11 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
     sortie.boostUsed = 0;
+    sortie.picked = 0;
+    sortie.pickupCredits = 0;
+    sortie.autopilot = 'off';
+    sortie.autopilotPhase = '';
+    autopilot.disengage();
     input.setFlaps(0);
     input.setCapturing(true);
     // A round always loads with the pilot's own camera; a screenshot scene sets its framing after.
@@ -288,8 +352,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.phase = 'flying';
     sortie.message = null;
     sortie.messageUntil = 0;
+    aircraftState.spec = aircraftWithKit(kit);
     resetToRunway(aircraftState);
-    aircraftState.fuel = round.fuel;
+    aircraftState.fuel = round.fuel * (aircraftState.spec.fuel / AIRCRAFT.fuel);
+    aircraftState.health = aircraftState.spec.health;
     input.setFlaps(0);
   }
 
@@ -331,13 +397,27 @@ export function createGame({ canvas, hudCanvas }) {
     progress = recordRound(progress, round.id, sortie.result);
     saveProgress(progress);
 
+    // The round's purse, plus whatever salvage was carried home. A clean sortie pays better than a
+    // salvage run, which is the point: the shop should reward flying well, not farming cans.
+    const purse = roundPurse(round, sortie.result);
+    kit.credits += purse;
+    saveKit(kit);
+    sortie.result.purse = purse;
+    sortie.result.picked = sortie.picked;
+    sortie.result.pickupCredits = sortie.pickupCredits;
+
     aircraftState.destroyed = reason === 'crash';
   }
 
   /** Restarts the current round from the threshold, keeping the same weather and course. */
   function restart() {
+    aircraftState.spec = aircraftWithKit(kit);
     resetToRunway(aircraftState);
-    aircraftState.fuel = round.fuel;
+    aircraftState.fuel = round.fuel * (aircraftState.spec.fuel / AIRCRAFT.fuel);
+    aircraftState.health = aircraftState.spec.health;
+    // The cans come back: a restart is a fresh attempt at the same course, not a scavenged one.
+    pickups.forEach((p) => { p.taken = false; });
+    autopilot.disengage();
     gates.forEach((g, i) => {
       g.passed = false;
       styleGate(gateVisuals.meshes[i], i === 0 ? 'next' : 'pending');
@@ -361,6 +441,10 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
     sortie.boostUsed = 0;
+    sortie.picked = 0;
+    sortie.pickupCredits = 0;
+    sortie.autopilot = 'off';
+    sortie.autopilotPhase = '';
     input.setFlaps(0);
     input.setCapturing(true);
   }
@@ -499,13 +583,40 @@ export function createGame({ canvas, hudCanvas }) {
     if (input.consumePressed('KeyP')) paused = !paused;
     if (paused) return;
 
+    // --- The autopilot. One key cycles it: hold, course, approach, off. It flies through the same
+    // controls the pilot does, so switching it on does not hand the aircraft to a different model.
+    if (input.consumePressed('KeyT')) {
+      const mode = autopilot.cycle(aircraftState, nextGate(gates));
+      sortie.autopilot = mode;
+      say(mode === 'off' ? 'Autopilot off — your aircraft.'
+        : mode === 'hold' ? 'Autopilot: hold heading and altitude.'
+        : mode === 'course' ? 'Autopilot: flying the course.'
+        : 'Autopilot: approach and landing.', 2.6);
+      if (mode === 'off') input.setFlaps(input.getFlaps());
+    }
+    // Any stick input from the pilot takes the aircraft back. An autopilot that fights the pilot for
+    // the controls is a way to lose an aircraft, so the pilot always wins.
+    if (autopilot.isOn() && (Math.abs(controls.pitch) > 0.01 || Math.abs(controls.roll) > 0.01
+      || Math.abs(controls.mouseDeltaX) > 2 || Math.abs(controls.mouseDeltaY) > 2)) {
+      autopilot.disengage();
+      sortie.autopilot = 'off';
+      say('Autopilot disengaged.', 1.8);
+    }
+    let flown = controls;
+    if (autopilot.isOn()) {
+      const apControls = autopilot.update(aircraftState, { gate: nextGate(gates), gates, dt });
+      if (apControls) flown = apControls;
+      sortie.autopilot = autopilot.mode;
+      sortie.autopilotPhase = autopilot.phase;
+    }
+
     const previous = {
       x: aircraftState.position.x,
       y: aircraftState.position.y,
       z: aircraftState.position.z,
     };
 
-    const events = stepAircraft(aircraftState, controls, dt);
+    const events = stepAircraft(aircraftState, flown, dt);
     for (const e of events) {
       if (e.type === 'crash') {
         sortie.crashed = true;
@@ -554,9 +665,27 @@ export function createGame({ canvas, hudCanvas }) {
       say(`Struck a ${label}: ${Math.round(damage)} damage.`, 4);
     }
 
+    // --- Salvage. The test is against the segment just flown, for the same reason the obstacle
+    // test is: a can is a few metres across and the aircraft crosses that in a frame.
+    const got = checkPickups(pickups, previous, aircraftState.position);
+    for (const p of got) {
+      const spec = PICKUP_SPECS[p.kind];
+      const gained = applyPickup(spec, aircraftState, round, kit);
+      sortie.picked += 1;
+      sortie.pickupCredits += gained.credits;
+      const bits = [];
+      if (gained.fuel) bits.push(`+${gained.fuel} fuel`);
+      if (gained.health) bits.push(`+${gained.health} hull`);
+      if (gained.boost) bits.push('burner refilled');
+      if (gained.credits) bits.push(`+${gained.credits} credits`);
+      say(`${spec.label}: ${bits.join(', ')}`, 2.4);
+    }
+
     // --- The guns. Fired from the same controls the flight model read, at the aircraft's own
     // position and heading, so the rounds go where the nose points.
-    sortie.firing = airDefence.fireGuns(dt, aircraftState, controls);
+    // The guns stay the pilot's: an autopilot that shoots is an autopilot that has been given the
+    // wrong job.
+    sortie.firing = autopilot.isOn() ? false : airDefence.fireGuns(dt, aircraftState, controls);
     airDefence.track(aircraftState.position);
     const combatEvents = airDefence.update(dt, aircraftState, sortie.time);
     for (const e of combatEvents) {
@@ -686,6 +815,7 @@ export function createGame({ canvas, hudCanvas }) {
 
     clouds.update(dt, aircraftState.wind);
     obstacles.update(dt, sortie.time);
+    pickupVisuals.update(dt, sortie.time);
     if (rain) rain.update(dt, camera, aircraftState.wind);
     // The hit flash decays on the render clock, not the physics clock, so a paused frame still
     // fades instead of freezing a red screen.
@@ -696,6 +826,30 @@ export function createGame({ canvas, hudCanvas }) {
     requestAnimationFrame(frame);
   }
 
+  /** The nearest uncollected can, as a bearing and a distance, or null. */
+  function nearestPickup() {
+    let best = null;
+    let bestD = Infinity;
+    const s = aircraftState;
+    for (const p of pickups) {
+      if (p.taken) continue;
+      const dx = p.x - s.position.x;
+      const dy = p.y - s.position.y;
+      const dz = p.z - s.position.z;
+      const d = Math.hypot(dx, dy, dz);
+      if (d < bestD) {
+        bestD = d;
+        best = { kind: p.kind, distance: d, bearing: Math.atan2(dx, -dz), height: dy };
+      }
+    }
+    return best && best.distance < 2200 ? best : null;
+  }
+
+  /** The kit's levels as a short map, for the HUD's upgrade row. */
+  function kitLevels() {
+    return { ...kit.levels };
+  }
+
   /**
    * Builds the HUD's payload from the current state, so the live loop and a shot agree.
    *
@@ -703,6 +857,13 @@ export function createGame({ canvas, hudCanvas }) {
    * compact layout: the two would otherwise draw over each other in the same part of the screen.
    */
   function drawHud(message = null) {
+    // A menu is open: the flight HUD belongs to a flying aircraft, and behind a title or debrief
+    // card it reports a second, contradicting set of numbers — the debrief says 917 while the HUD
+    // behind it says 118. Clear the canvas and draw nothing until the card closes.
+    if (titleUi?.isOpen?.()) {
+      hud.clear();
+      return;
+    }
     const s = aircraftState;
     const gate = nextGate(gates);
     const bearing = gate ? gateBearing(gate, s.position) : null;
@@ -745,6 +906,20 @@ export function createGame({ canvas, hudCanvas }) {
       hitFlash: sortie.hitFlash,
       threats,
       threatBearing: threats.nearest?.bearing ?? 0,
+
+      // The autopilot's own line, so a pilot who has handed over the aircraft can see what it is
+      // doing rather than guessing from the control positions.
+      autopilot: sortie.autopilot,
+      autopilotPhase: sortie.autopilotPhase,
+      // Salvage this sortie, and the bank it is going into.
+      picked: sortie.picked,
+      pickupCredits: sortie.pickupCredits,
+      credits: kit.credits,
+      // The nearest uncollected can, for the HUD's marker: a can the pilot cannot find is a can
+      // that does not exist.
+      nearestPickup: nearestPickup(),
+      // The kit's own levels, so the HUD can show what the aircraft has become.
+      upgrades: kitLevels(),
     };
     hud.draw(payload);
     // The cockpit's glass panel shows the same numbers, so it is repainted from the same payload.
@@ -827,12 +1002,29 @@ export function createGame({ canvas, hudCanvas }) {
     setCinema(c) { cinema = c; },
     get round() { return round; },
     get progress() { return progress; },
+    get kit() { return kit; },
+    get autopilot() { return autopilot; },
+    get pickups() { return pickups; },
+    /** The clock: hour, phase, light level. A scene or a test can set the hour from here. */
+    get dayCycle() { return dayCycle; },
+    /** Where the towns, works and harbour ended up, for anything that wants to avoid them. */
+    get settlements() { return settlements; },
+    /** The heightfield, for scenes and tests that need to place something on the ground. */
+    get terrain() { return terrain; },
+    /** Re-reads the kit and refits the aircraft. The shop calls this after a purchase. */
+    refit() {
+      kit = loadKit();
+      aircraftState.spec = aircraftWithKit(kit);
+      return kit;
+    },
     // The screenshot scenes stand in for a pilot who has flown a few rounds, so they need to write
     // the campaign record the title card and the debrief both read.
     setProgress(p) { progress = p; },
     // Injected by main.js after both exist: a scene that shows an overlay needs the UI handle, and
-    // the UI needs the game, so neither can be built with the other in hand.
-    ui: null,
+    // the UI needs the game, so neither can be built with the other in hand. A setter rather than a
+    // plain field so drawHud's local stays in step with it.
+    set ui(next) { titleUi = next; },
+    get ui() { return titleUi; },
     get campaign() { return CAMPAIGN; },
     get campaignPar() { return campaignPar(); },
     loadRound, beginRound, endRound,

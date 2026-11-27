@@ -153,6 +153,53 @@ export const ENEMY = {
 };
 
 /**
+ * The upgrade tree. Four lines, three levels each. Every `value` here is read by the flight model
+ * through `aircraftWithKit`, so a purchase changes the aircraft rather than a menu label.
+ */
+export const UPGRADES = [
+  {
+    id: 'engine',
+    name: 'Engine',
+    blurb: 'Thrust and top speed. The straight-line answer to a tight course.',
+    tiers: [
+      { value: 0.09, cost: 260, label: '+9% thrust' },
+      { value: 0.10, cost: 520, label: '+10% thrust' },
+      { value: 0.12, cost: 900, label: '+12% thrust' },
+    ],
+  },
+  {
+    id: 'airframe',
+    name: 'Airframe',
+    blurb: 'Hit points, and a wing that forgives a firm landing.',
+    tiers: [
+      { value: 0.15, cost: 240, label: '+15% hull' },
+      { value: 0.18, cost: 480, label: '+18% hull' },
+      { value: 0.22, cost: 840, label: '+22% hull' },
+    ],
+  },
+  {
+    id: 'fuel',
+    name: 'Fuel system',
+    blurb: 'A bigger tank and a leaner burn. Range is a weapon.',
+    tiers: [
+      { value: 0.12, cost: 220, label: '+12% tank' },
+      { value: 0.14, cost: 440, label: '+14% tank' },
+      { value: 0.16, cost: 780, label: '+16% tank' },
+    ],
+  },
+  {
+    id: 'handling',
+    name: 'Handling',
+    blurb: 'Faster controls, a later stall, a longer afterburner.',
+    tiers: [
+      { value: 0.10, cost: 300, label: '+10% control' },
+      { value: 0.12, cost: 560, label: '+12% control' },
+      { value: 0.14, cost: 960, label: '+14% control' },
+    ],
+  },
+];
+
+/**
  * The gate course's shared numbers. Each round supplies its own count, radius and clearance
  * profile; these are what every round has in common.
  */
@@ -189,6 +236,8 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 13500,
     difficulty: 1.0,
+    /** Local hour the sortie is flown at: the clock drives sun, moon, stars and palette. */
+    hour: 7.4,
     /** The valley is friendly airspace: no air defence, so the first round teaches the airframe. */
     airDefence: { flak: 0, drones: 0 },
     objective: 'Thread six gates, then land back at Harrow Field.',
@@ -230,6 +279,7 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 11500,
     difficulty: 1.15,
+    hour: 15.6,
     /** A single flak site on the ridge, so the pilot meets ground fire with room to avoid it. */
     airDefence: { flak: 2, drones: 0 },
     objective: 'Seven gates with a nine-metre crosswind. Land it straight.',
@@ -265,6 +315,7 @@ export const CAMPAIGN = [
     rain: 0.12,
     visibility: 5800,
     difficulty: 1.3,
+    hour: 11.2,
     airDefence: { flak: 3, drones: 1 },
     objective: 'Eight gates, most of them inside cloud. Climb to the tops.',
     debrief: 'Instrument flying with a stick and a gate. Neatly done.',
@@ -299,6 +350,7 @@ export const CAMPAIGN = [
     rain: 0,
     visibility: 14000,
     difficulty: 1.55,
+    hour: 18.9,
     /** The gorge is a shooting gallery: guns on the rims and drones running the floor. */
     airDefence: { flak: 4, drones: 2 },
     objective: 'Eight gates down in the gorge. Low, fast, precise.',
@@ -348,6 +400,7 @@ export const CAMPAIGN = [
     rain: 0.85,
     visibility: 4400,
     difficulty: 1.9,
+    hour: 21.6,
     airDefence: { flak: 5, drones: 3 },
     objective: 'Ten gates in a gale, then a crosswind landing in the rain.',
     debrief: 'Storm front, ten gates, and a landing in one piece. That is the campaign.',

@@ -98,6 +98,34 @@
   .round .score { font-size: 15px; font-weight: 700; color: #ffd97a; min-width: 62px; text-align: right; }
   .round.locked .score { color: #55707e; font-size: 9.5px; letter-spacing: 0.14em; }
 
+  /* Rounds and the hangar side by side on a wide screen: the card is a fixed height and a stack
+     of ten blocks does not fit in a 720p viewport. */
+  .campaign-body { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); gap: 20px; align-items: start; }
+  @media (max-width: 900px) { .campaign-body { grid-template-columns: minmax(0, 1fr); } }
+
+  /* The hangar: four upgrade lines, the bank, and what the next tier buys. */
+  .shop { margin: 0; padding: 14px 16px; border-radius: 10px;
+    background: rgba(12, 24, 34, 0.66); border: 1px solid rgba(110, 170, 195, 0.14); }
+  .shop-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 10px; }
+  .shop-title { font-size: 9.5px; letter-spacing: 0.26em; text-transform: uppercase; color: #74b79c; }
+  .shop-bank { font-size: 12px; font-weight: 700; color: #ffd97a; letter-spacing: 0.04em; }
+  .shop-lines { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+  .shop-line { display: grid; grid-template-columns: 1fr auto; grid-template-areas: 'name cost' 'pips next';
+    gap: 3px 8px; align-items: center; padding: 8px 11px; border-radius: 7px; text-align: left;
+    background: rgba(16, 30, 42, 0.7); border: 1px solid rgba(110, 170, 195, 0.14);
+    color: inherit; font-family: inherit; cursor: pointer; transition: border-color 0.16s, background 0.16s; }
+  .shop-line:hover:not(:disabled) { border-color: rgba(120, 230, 200, 0.5); background: rgba(20, 40, 54, 0.9); }
+  .shop-line:disabled { cursor: default; opacity: 0.55; }
+  .shop-line.afford { border-color: rgba(120, 230, 200, 0.32); }
+  .shop-line .sl-name { grid-area: name; font-size: 11.5px; font-weight: 700; color: #eaf6ff; letter-spacing: 0.04em; }
+  .shop-line .sl-cost { grid-area: cost; font-size: 10.5px; font-weight: 700; color: #ffd97a; }
+  .shop-line.maxed .sl-cost { color: #86c9ad; letter-spacing: 0.1em; }
+  .shop-line .sl-pips { grid-area: pips; display: flex; gap: 3px; }
+  .shop-line .sl-pips i { width: 14px; height: 4px; border-radius: 2px; background: rgba(120, 160, 180, 0.28); }
+  .shop-line .sl-pips i.on { background: rgba(120, 240, 190, 0.9); }
+  .shop-line .sl-next { grid-area: next; font-size: 9px; color: #7fa9bd; letter-spacing: 0.05em; text-align: right; }
+  .shop-note { margin: 10px 0 0; font-size: 9px; line-height: 1.5; color: #6f93a7; }
+
   .ui-card footer { display: flex; gap: 9px; align-items: center; flex-wrap: wrap; margin-top: 20px; padding-top: 16px; border-top: 1px solid rgba(110, 170, 195, 0.14); }
   .ui-card .totals { display: flex; gap: 20px; flex-wrap: wrap; font-size: 11px; color: #9dbdcf; margin-right: auto; }
   .ui-card .totals b { color: #eaf6ff; font-size: 13px; }

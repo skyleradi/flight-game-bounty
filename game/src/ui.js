@@ -8,7 +8,8 @@
 // The flow is: title → (pick a round) → briefing → flying → debrief → (next round | retry | title).
 // Escape out of a briefing drops back to the title; Escape in the air pauses.
 
-import { CAMPAIGN, campaignPar } from './config.js';
+import { CAMPAIGN, UPGRADES, campaignPar } from './config.js';
+import { buy, canBuy, levelOf, nextCost } from './kit.js';
 
 const GRADE_BANDS = [
   { min: 0.86, grade: 'A', line: 'Textbook.' },
@@ -95,6 +96,7 @@ export function createUI({ root, game, onStartRound, onRetry, onNext, onQuit }) 
         </p>
       </header>
 
+      <div class="campaign-body">
       <div class="rounds">
         ${CAMPAIGN.map((r, i) => {
           const locked = i + 1 > progress.unlocked;
@@ -117,6 +119,32 @@ export function createUI({ root, game, onStartRound, onRetry, onNext, onQuit }) 
         }).join('')}
       </div>
 
+      <div class="shop">
+        <div class="shop-head">
+          <span class="shop-title">Hangar</span>
+          <span class="shop-bank">${Math.round(game.kit?.credits ?? 0)} credits</span>
+        </div>
+        <div class="shop-lines">
+          ${UPGRADES.map((line) => {
+            const lvl = levelOf(game.kit, line.id);
+            const cost = nextCost(game.kit, line.id);
+            const maxed = cost === null;
+            const afford = cost !== null && game.kit.credits >= cost;
+            return `
+              <button class="shop-line ${maxed ? 'maxed' : ''} ${afford ? 'afford' : ''}"
+                      data-upgrade="${line.id}" ${maxed ? 'disabled' : ''}
+                      title="${line.blurb}">
+                <span class="sl-name">${line.name}</span>
+                <span class="sl-pips">${line.tiers.map((t, i) => `<i class="${i < lvl ? 'on' : ''}"></i>`).join('')}</span>
+                <span class="sl-cost">${maxed ? 'MAX' : `${cost} cr`}</span>
+                <span class="sl-next">${maxed ? '' : line.tiers[lvl].label}</span>
+              </button>`;
+          }).join('')}
+        </div>
+        <p class="shop-note">Credits come from flying rounds clean and from salvage picked up on course.</p>
+      </div>
+      </div>
+
       <footer>
         <div class="totals">
           <span><b>${totalBest}</b> campaign score</span>
@@ -126,7 +154,7 @@ export function createUI({ root, game, onStartRound, onRetry, onNext, onQuit }) 
         <div class="keys">
           <span><b>W/S</b> pitch</span><span><b>A/D</b> roll</span><span><b>Q/E</b> rudder</span>
           <span><b>Shift/Ctrl</b> throttle</span><span><b>F/V</b> flaps</span>
-          <span><b>C</b> view</span><span><b>R</b> restart</span><span><b>P</b> pause</span>
+          <span><b>T</b> autopilot</span><span><b>C</b> view</span><span><b>R</b> restart</span><span><b>P</b> pause</span>
         </div>
       </footer>`;
 
@@ -134,6 +162,17 @@ export function createUI({ root, game, onStartRound, onRetry, onNext, onQuit }) 
       btn.addEventListener('click', () => {
         const index = Number(btn.dataset.round);
         onStartRound(index);
+      });
+    });
+
+    // The hangar. A purchase refits the aircraft and repaints the card, so the pips and the bank
+    // move together rather than one lagging the other.
+    card.querySelectorAll('button.shop-line').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        if (buy(game.kit, btn.dataset.upgrade)) {
+          game.refit();
+          showTitle();
+        }
       });
     });
 

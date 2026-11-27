@@ -145,6 +145,7 @@ export const KEY_HELP = [
   ['Shift / Ctrl', 'throttle up / down'],
   ['Tab', 'afterburner'],
   ['X', 'guns'],
+  ['T', 'autopilot: hold / course / approach'],
   ['F / V', 'flaps out / in'],
   ['G', 'flaps up'],
   ['Space', 'wheel brakes'],
