@@ -583,10 +583,8 @@ export function createHud(canvas) {
     // not, and the only way to find out is to land and be refused.
     if (d.objective?.required) {
       const o = d.objective;
-      const done = o.flakDone + o.droneDone;
-      const need = o.flakNeed + o.droneNeed;
       text('OBJECTIVE', x + 12, y + 68, 9.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
-      text(o.met ? 'MET' : `${done}/${need}`, x + w - 12, y + 68, 10.5, 'right',
+      text(o.met ? 'MET' : `${o.done}/${o.need}`, x + w - 12, y + 68, 10.5, 'right',
         o.met ? 'rgba(130, 235, 195, 0.98)' : 'rgba(255, 176, 110, 0.98)', 700);
     }
 
@@ -683,7 +681,7 @@ export function createHud(canvas) {
     if (d.objective?.required) {
       const o = d.objective;
       text('OBJ', x + 10, y + 39, 8.5, 'left', 'rgba(160, 205, 220, 0.85)', 600);
-      text(o.met ? 'MET' : `${o.flakDone + o.droneDone}/${o.flakNeed + o.droneNeed}`, x + w - 10, y + 39, 9.5,
+      text(o.met ? 'MET' : `${o.done}/${o.need}`, x + w - 10, y + 39, 9.5,
         'right', o.met ? 'rgba(130, 235, 195, 0.98)' : 'rgba(255, 176, 110, 0.98)', 700);
     }
   }

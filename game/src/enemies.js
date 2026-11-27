@@ -204,6 +204,160 @@ function buildDrone({ ace = false } = {}) {
 }
 
 /**
+ * Builds a surface-to-air missile site.
+ *
+ * It has to be distinguishable from a flak tower at a glance, from the air, in one frame — because
+ * the two demand opposite responses. A flak tower is a lattice mast with a gun house on top: tall,
+ * thin, and shooting something the pilot can outrun. A SAM site is low and wide, a revetment with a
+ * pair of launch rails and a radar that is visibly turning, and its round cannot be outrun at all.
+ *
+ * So the silhouette is the opposite shape: squat, spread out, three boxes and a dish, no mast. The
+ * rails are canted up, which also tells the pilot where the danger comes from.
+ */
+function buildSamSite() {
+  const group = new THREE.Group();
+
+  const concrete = new THREE.MeshStandardMaterial({
+    color: 0x74716a, roughness: 0.95, metalness: 0.03, flatShading: true,
+  });
+  const olive = new THREE.MeshStandardMaterial({
+    color: 0x4d5342, roughness: 0.78, metalness: 0.16, flatShading: true,
+  });
+  const dark = new THREE.MeshStandardMaterial({
+    color: 0x24282c, roughness: 0.62, metalness: 0.48,
+  });
+
+  // The revetment: a low apron, wider than it is tall. This is the shape that reads from 2 km.
+  const apron = new THREE.Mesh(new THREE.CylinderGeometry(13.5, 15.5, 2.4, 8), concrete);
+  apron.position.y = 1.2;
+  apron.receiveShadow = true;
+  group.add(apron);
+
+  // Two launch rails on a turntable. The turntable is the part that swings onto the aircraft.
+  const mount = new THREE.Group();
+  mount.position.y = 2.4;
+  const ring = new THREE.Mesh(new THREE.CylinderGeometry(5.4, 6.0, 1.6, 10), olive);
+  ring.position.y = 0.8;
+  mount.add(ring);
+
+  for (const side of [-1, 1]) {
+    const rail = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.7, 11.0), dark);
+    rail.position.set(side * 2.3, 2.9, 0);
+    rail.rotation.x = -0.34;
+    mount.add(rail);
+    // The round itself, sitting on the rail: a pale body with a dark nose.
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.62, 9.0, 8), olive);
+    body.rotation.x = Math.PI * 0.5 - 0.34;
+    body.position.set(side * 2.3, 3.5, 0.4);
+    mount.add(body);
+    const nose = new THREE.Mesh(new THREE.ConeGeometry(0.62, 1.9, 8), dark);
+    nose.rotation.x = -Math.PI * 0.5 - 0.34;
+    nose.position.set(side * 2.3, 4.9, -4.6);
+    mount.add(nose);
+  }
+  group.add(mount);
+
+  // The acquisition radar: a dish on its own post. It spins, which is what makes a static site read
+  // as alive from the air.
+  const radar = new THREE.Group();
+  radar.position.set(-10.5, 3.0, 4.0);
+  const post = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.7, 5.2, 6), dark);
+  post.position.y = 2.6;
+  radar.add(post);
+  const dish = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.4, 3.4, 0.4, 12, 1, false, 0, Math.PI),
+    new THREE.MeshStandardMaterial({
+      color: 0x8d9188, roughness: 0.6, metalness: 0.3, side: THREE.DoubleSide, flatShading: true,
+    }),
+  );
+  dish.rotation.set(Math.PI * 0.5, 0, 0);
+  dish.position.y = 5.9;
+  radar.add(dish);
+  group.add(radar);
+
+  // The beacon: red while it is loaded, so the pilot can count how many sites are still waiting.
+  const lamp = new THREE.Mesh(
+    new THREE.SphereGeometry(0.9, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xff5a30 }),
+  );
+  lamp.position.set(0, 7.4, 0);
+  group.add(lamp);
+
+  return { group, mount, radar, dish, lamp };
+}
+
+/**
+ * Builds a bomber.
+ *
+ * Deliberately the largest thing in the air and the slowest. The interceptor is a delta that turns
+ * inside everything; this is a slab with four engines, a long wing and a tail, so the two are never
+ * confused even as silhouettes at the same distance. `damage` darkens the skin and hangs smoke, so a
+ * bomber that has been hit looks hit — the pilot can decide whether to spend another pass.
+ */
+function buildBomber() {
+  const group = new THREE.Group();
+  const skin = new THREE.MeshStandardMaterial({
+    color: 0x5a6152, roughness: 0.72, metalness: 0.22, flatShading: true,
+  });
+  const underside = new THREE.MeshStandardMaterial({
+    color: 0x3e4540, roughness: 0.8, metalness: 0.15, flatShading: true,
+  });
+  const glass = new THREE.MeshStandardMaterial({
+    color: 0x2f4a52, roughness: 0.25, metalness: 0.6, flatShading: true,
+  });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x1d2124, roughness: 0.6, metalness: 0.4 });
+
+  // Fuselage: a long box, tapered at the nose by a smaller box in front of it.
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.6, 4.2, 26), skin);
+  body.castShadow = true;
+  group.add(body);
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(3.6, 3.4, 4.2), skin);
+  nose.position.z = -14.4;
+  group.add(nose);
+  const canopy = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.5, 3.0), glass);
+  canopy.position.set(0, 2.5, -13.2);
+  group.add(canopy);
+
+  // Wing: one wide slab through the fuselage, which is what gives the planform its span.
+  const wing = new THREE.Mesh(new THREE.BoxGeometry(42, 1.0, 8.4), underside);
+  wing.position.y = -0.6;
+  wing.castShadow = true;
+  group.add(wing);
+  // Tailplane and fin, so the silhouette has a back end as well as a front.
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(16, 0.8, 4.2), underside);
+  tail.position.set(0, 0.4, 12.0);
+  group.add(tail);
+  const fin = new THREE.Mesh(new THREE.BoxGeometry(0.9, 7.0, 5.2), skin);
+  fin.position.set(0, 5.0, 12.4);
+  group.add(fin);
+
+  // Four engines in two pods, the detail that says "bomber" rather than "transport".
+  for (const side of [-1, 1]) {
+    for (const fore of [-1, 1]) {
+      const pod = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.0, 6.4), dark);
+      pod.position.set(side * (9 + (fore > 0 ? 6.4 : 0)), -1.4, -1.0);
+      group.add(pod);
+      const disc = new THREE.Mesh(new THREE.CircleGeometry(1.0, 8), glass);
+      disc.position.set(side * (9 + (fore > 0 ? 6.4 : 0)), -1.4, -4.3);
+      group.add(disc);
+    }
+  }
+
+  // The dorsal turret. A bomber that cannot defend itself is a free kill, which is not a decision.
+  const turret = new THREE.Group();
+  turret.position.set(0, 2.6, 3.2);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(1.7, 8, 6), dark);
+  turret.add(dome);
+  const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.28, 4.4, 6), dark);
+  barrel.rotation.x = -Math.PI * 0.34;
+  barrel.position.set(0, 0.9, 2.0);
+  turret.add(barrel);
+  group.add(turret);
+
+  return { group, turret };
+}
+
+/**
  * The air defence for one round.
  *
  * `state` is the same aircraft state the flight model steps; the module reads its position,
@@ -221,6 +375,12 @@ export function createAirDefence({ scene, terrain, round, haze }) {
   const turrets = [];
   /** Every live drone. */
   const drones = [];
+  /** Every live SAM site: a launcher that fires guided rounds, not tracers. */
+  const sams = [];
+  /** Every live bomber. Slow, large, and the only enemy that is trying to get somewhere. */
+  const bombers = [];
+  /** SAM rounds in flight: { pos, vel, life, damage }. Separate from `bullets`, which are ballistic. */
+  const missiles = [];
   /** Rounds in flight: { pos, vel, life, from }. */
   const bullets = [];
   /** The aircraft's own rounds: { pos, vel, life }. */
@@ -352,6 +512,93 @@ export function createAirDefence({ scene, terrain, round, haze }) {
 
   placeTurrets(cfg.flak ?? 0);
   placeDrones(droneCount, aceIndex);
+
+  // --- SAM sites. Placed on ground that is high enough to have a view but set back from the gate
+  // line, because a site next to a gate cannot be avoided by geometry: the pilot has to fly through
+  // the cone it covers. They are kept apart from the flak towers so a pass never faces both at once.
+  function placeSams(count) {
+    let placed = 0;
+    for (let tries = 0; tries < 4000 && placed < count; tries += 1) {
+      const along = 1800 + rng() * 3400;
+      const lateral = (rng() * 2 - 1) * 1900;
+      const x = RUNWAY.x + Math.sin(RUNWAY.heading) * along + Math.cos(RUNWAY.heading) * lateral;
+      const z = RUNWAY.z - Math.cos(RUNWAY.heading) * along + Math.sin(RUNWAY.heading) * lateral;
+      const y = terrain.heightAt(x, z);
+      if (y < 70) continue;
+      const slope = Math.abs(terrain.heightAt(x + 30, z) - y) + Math.abs(terrain.heightAt(x, z + 30) - y);
+      if (slope / 30 > 0.6) continue;
+      let tooClose = false;
+      for (const t of turrets) {
+        if (Math.hypot(t.x - x, t.z - z) < 700) { tooClose = true; break; }
+      }
+      if (!tooClose) {
+        for (const s of sams) {
+          if (Math.hypot(s.x - x, s.z - z) < 1100) { tooClose = true; break; }
+        }
+      }
+      if (tooClose) continue;
+
+      const built = buildSamSite();
+      built.group.position.set(x, y - 0.6, z);
+      built.group.rotation.y = rng() * Math.PI * 2;
+      group.add(built.group);
+      sams.push({
+        x, z, y: y - 0.6,
+        root: built.group,
+        mount: built.mount,
+        radar: built.radar,
+        dish: built.dish,
+        lamp: built.lamp,
+        hp: ENEMY.sam.health,
+        alive: true,
+        cooldown: 2.2 + rng() * 2.5,
+        yaw: 0,
+        /** Missiles this site has in the air. Capped so a site cannot empty its rails at once. */
+        inflight: 0,
+      });
+      placed += 1;
+    }
+  }
+
+  // --- Bombers. A flight of `count` in a loose line abreast, flying the course's own axis toward
+  // the far end: they enter from behind the aircraft's start and cross the valley, so the pilot
+  // meets them head-on if they climb, and has to turn for them if they do not.
+  function placeBombers(count) {
+    const spacing = 190;
+    // The line runs across the course, not along it, so a single pass cannot take the whole flight.
+    const across = RUNWAY.heading + Math.PI * 0.5;
+    for (let i = 0; i < count; i += 1) {
+      const offset = (i - (count - 1) * 0.5) * spacing;
+      const along = 2600 + rng() * 500;
+      const x = RUNWAY.x + Math.sin(RUNWAY.heading) * along + Math.cos(across) * offset;
+      const z = RUNWAY.z - Math.cos(RUNWAY.heading) * along + Math.sin(across) * offset;
+      const ground = terrain.heightAt(x, z);
+      const y = Math.max(ground + 300, 460);
+      const built = buildBomber();
+      built.group.position.set(x, y, z);
+      group.add(built.group);
+      bombers.push({
+        group: built.group,
+        turret: built.turret,
+        position: new THREE.Vector3(x, y, z),
+        velocity: new THREE.Vector3(),
+        /** They fly the reciprocal of the course, i.e. back toward the airfield. */
+        heading: RUNWAY.heading + Math.PI,
+        hp: ENEMY.bomber.health,
+        alive: true,
+        speedNow: ENEMY.bomber.speed,
+        cooldown: 1.4 + rng() * 2.0,
+        burstLeft: 0,
+        burstTimer: 0,
+        flashTimer: 0,
+        /** Set when the airframe is badly hurt, so the model can smoke. */
+        hurt: false,
+      });
+    }
+  }
+
+  placeSams(cfg.sams ?? 0);
+  placeBombers(cfg.bombers ?? 0);
 
   // One squad book per round, shared by every interceptor: it is what stops three of them from
   // stacking into a single gun. One ace per flight, so there is a leader worth fearing.
@@ -553,6 +800,170 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     }
     squad.attackers = attacking;
 
+    // --- SAM sites. Each one tracks the aircraft with its launcher and turns its radar whatever
+    // the range, so a site reads as alive before it fires. A launch needs the aircraft inside range
+    // and a clear rail: `inflight` is capped, which is what stops a single site from emptying both
+    // rails in the same second and turning a survivable threat into an unavoidable one.
+    for (const s of sams) {
+      if (!s.alive) continue;
+
+      const dx = aircraftPos.x - s.x;
+      const dy = aircraftPos.y - (s.y + 4);
+      const dz = aircraftPos.z - s.z;
+      const dist = Math.hypot(dx, dy, dz);
+
+      // The launcher swings onto the aircraft; the radar spins on its own clock.
+      const wantYaw = Math.atan2(dx, -dz);
+      let yawDelta = ((wantYaw - s.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      const maxYaw = 1.1 * dt;
+      s.yaw += Math.max(-maxYaw, Math.min(maxYaw, yawDelta));
+      s.mount.rotation.y = s.yaw;
+      s.radar.rotation.y = (sortieTime * 1.15) % (Math.PI * 2);
+      // The dish tilts toward the aircraft's elevation, so a site tracking high reads as tracking.
+      s.dish.rotation.z = Math.max(-0.5, Math.min(0.5, Math.atan2(dy, Math.hypot(dx, dz)) * 0.5));
+
+      // Loaded lamp: on when the rails are ready, off while reloading. This is the pilot's cue that
+      // a site is about to shoot, and the only warning a missile is coming before it is visible.
+      s.lamp.visible = s.alive && (s.cooldown <= 0 || s.inflight > 0);
+
+      // Drop the in-flight count as its rounds expire, so a site is never permanently empty.
+      if (s.inflight > 0 && missiles.length === 0) s.inflight = 0;
+
+      if (dist > ENEMY.sam.range) { s.cooldown = Math.max(s.cooldown, 0.6); continue; }
+      s.cooldown -= dt;
+      if (s.cooldown > 0 || s.inflight >= 1) continue;
+
+      // Launch. The round leaves the rail pointing at where the aircraft is now, with the site's
+      // own small lead, and the motor does the rest.
+      const aim = new THREE.Vector3(dx, dy, dz).normalize();
+      const from = new THREE.Vector3(
+        s.x + aim.x * 7, s.y + 5.2 + aim.y * 7, s.z + aim.z * 7,
+      );
+      missiles.push({
+        pos: from,
+        vel: aim.clone().multiplyScalar(ENEMY.sam.speed * 0.35),
+        life: ENEMY.sam.life,
+        damage: ENEMY.sam.damage,
+        /** Seconds of motor left. A round that has burned out can still turn, but not accelerate. */
+        burn: 3.2,
+        fuse: ENEMY.sam.fuse,
+      });
+      s.cooldown = ENEMY.sam.reload * (0.85 + rng() * 0.3);
+      s.inflight += 1;
+      spawnSpark(from, 0xffb070, 2.0);
+    }
+
+    // --- SAM rounds. Guided all the way: each step the round turns toward the aircraft by at most
+    // its fin limit, which is set below the aircraft's own turn rate so a hard break always beats
+    // it. The warhead fuses on proximity rather than on a hit, so a near miss still costs airframe.
+    for (let i = missiles.length - 1; i >= 0; i -= 1) {
+      const m = missiles[i];
+      m.life -= dt;
+      if (m.life <= 0) {
+        spawnSpark(m.pos, 0xffa060, 1.2);
+        missiles.splice(i, 1);
+        continue;
+      }
+
+      // Steer. The target is the aircraft's position, and the round's velocity is rotated toward it
+      // rather than snapped, so its path is a curve the pilot can read and turn inside.
+      const to = tmp.copy(aircraftPos).sub(m.pos);
+      const range = to.length();
+      if (range > 1e-3) {
+        to.divideScalar(range);
+        const speed = m.vel.length() || 1;
+        const cur = dirVec.copy(m.vel).divideScalar(speed);
+        const angle = Math.acos(Math.max(-1, Math.min(1, cur.dot(to))));
+        const maxTurn = ENEMY.sam.turnRate * dt;
+        if (angle > 1e-4) {
+          const k = Math.min(1, maxTurn / angle);
+          cur.lerp(to, k).normalize();
+        }
+        m.vel.copy(cur).multiplyScalar(speed);
+      }
+
+      // Motor: accelerates for its burn, then coasts. A round that never slowed would arrive from
+      // beyond any range the pilot could see it launched from.
+      if (m.burn > 0) {
+        m.burn -= dt;
+        m.vel.setLength(Math.min(ENEMY.sam.speed, m.vel.length() + 190 * dt));
+      } else {
+        m.vel.y -= 6.5 * dt;
+      }
+
+      m.pos.addScaledVector(m.vel, dt);
+
+      // Ground: a round that flies into the hill is a puff of dirt, and a near miss the pilot earned.
+      if (m.pos.y < terrain.heightAt(m.pos.x, m.pos.z)) {
+        spawnSpark(m.pos, 0xffa060, 1.8);
+        missiles.splice(i, 1);
+        continue;
+      }
+
+      // Proximity fuse. Generous on purpose: the aircraft is 11 m across, and a round that visibly
+      // passes within its own wingspan should count as a hit rather than as a clean miss.
+      if (range < m.fuse) {
+        events.push({ type: 'hit', damage: m.damage, position: m.pos.clone() });
+        spawnSpark(m.pos, 0xffd090, 3.0);
+        missiles.splice(i, 1);
+      }
+    }
+
+    // --- Bombers. They do not manoeuvre: a straight run at a fixed speed, which is what makes an
+    // intercept a matter of arriving in time rather than of winning a turning fight. The dorsal
+    // turret tracks and fires, so the aircraft cannot simply sit on its tail.
+    for (const b of bombers) {
+      if (!b.alive) continue;
+
+      // Fly the line. Heading is fixed at placement; the position integrates along it.
+      V_fwd.set(
+        Math.sin(b.heading),
+        0,
+        -Math.cos(b.heading),
+      );
+      b.velocity.copy(V_fwd).multiplyScalar(b.speedNow);
+      b.position.addScaledVector(b.velocity, dt);
+      b.group.position.copy(b.position);
+      b.group.rotation.set(0, -b.heading, 0, 'YXZ');
+
+      // A wounded bomber smokes and slows: the feedback that says "one more pass will do it".
+      if (!b.hurt && b.hp < ENEMY.bomber.health * 0.45) {
+        b.hurt = true;
+        b.speedNow = ENEMY.bomber.speed * 0.82;
+        spawnSpark(b.position, 0x30302e, 2.4);
+      }
+
+      // The turret tracks the aircraft and fires a burst inside its own range.
+      const dx = aircraftPos.x - b.position.x;
+      const dy = aircraftPos.y - b.position.y;
+      const dz = aircraftPos.z - b.position.z;
+      const dist = Math.hypot(dx, dy, dz);
+      const wantYaw = Math.atan2(dx, -dz);
+      b.turret.rotation.y = ((wantYaw - b.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
+      b.turret.rotation.x = -Math.atan2(dy, Math.hypot(dx, dz)) * 0.6;
+
+      if (dist > ENEMY.bomber.range) continue;
+      b.cooldown -= dt;
+      if (b.burstLeft > 0) {
+        b.burstTimer -= dt;
+        if (b.burstTimer <= 0) {
+          fireBullet(
+            b.position.clone().add(new THREE.Vector3(0, 3.4, 0)),
+            new THREE.Vector3(dx, dy, dz).normalize(),
+            ENEMY.bulletSpeed * 0.9,
+            ENEMY.bomber.damage,
+            { spread: 0.03 },
+          );
+          b.burstLeft -= 1;
+          b.burstTimer = 0.14;
+          if (b.burstLeft <= 0) b.cooldown = 2.4 + rng() * 1.8;
+        }
+      } else if (b.cooldown <= 0) {
+        b.burstLeft = ENEMY.bomber.burst;
+        b.burstTimer = 0;
+      }
+    }
+
     // --- Rounds. Integrated, then tested against the aircraft's position as a sphere. The aircraft
     // is 11 m across, so the hit sphere is generous enough that a round which visibly passes
     // through the fuselage counts.
@@ -608,6 +1019,64 @@ export function createAirDefence({ scene, terrain, round, haze }) {
         }
         consumed = true;
         break;
+      }
+      if (!consumed) {
+        for (const site of sams) {
+          if (!site.alive) continue;
+          // A site is a low apron, not a mast: the hit box is at the launcher's own height and
+          // wide enough to cover the revetment, which is what the rounds would actually strike.
+          if (Math.abs(s.pos.y - (site.y + 4)) > 11) continue;
+          if (Math.hypot(s.pos.x - site.x, s.pos.z - site.z) > 15) continue;
+          site.hp -= 9;
+          spawnSpark(s.pos, 0xffe0a0);
+          events.push({
+            type: 'hitmark',
+            kind: 'sam',
+            damage: 9,
+            killed: site.hp <= 0,
+            position: s.pos.clone(),
+          });
+          if (site.hp <= 0) {
+            site.alive = false;
+            site.root.visible = false;
+            spawnSpark(new THREE.Vector3(site.x, site.y + 4, site.z), 0xffa040, 3.4);
+            events.push({ type: 'kill', kind: 'sam', position: new THREE.Vector3(site.x, site.y + 4, site.z) });
+          }
+          consumed = true;
+          break;
+        }
+      }
+      if (!consumed) {
+        for (const bomb of bombers) {
+          if (!bomb.alive) continue;
+          // The airframe is 26 m long and 42 m across, so the box is a swept sphere wide enough that
+          // a round passing along the fuselage counts. A bomber is not a fighter: it should take
+          // sustained fire, not a single lucky round.
+          if (bomb.position.distanceToSquared(s.pos) < 15 * 15) {
+            bomb.hp -= 9;
+            spawnSpark(s.pos, 0xff9040);
+            events.push({
+              type: 'hitmark',
+              kind: 'bomber',
+              damage: 9,
+              killed: bomb.hp <= 0,
+              position: s.pos.clone(),
+            });
+            if (bomb.hp <= 0) {
+              bomb.alive = false;
+              bomb.group.visible = false;
+              spawnSpark(bomb.position, 0xffb040, 3.6);
+              events.push({
+                type: 'kill',
+                kind: 'bomber',
+                position: bomb.position.clone(),
+                score: ENEMY.bomber.score,
+              });
+            }
+            consumed = true;
+            break;
+          }
+        }
       }
       if (!consumed) {
         for (const d of drones) {
@@ -764,6 +1233,27 @@ export function createAirDefence({ scene, terrain, round, haze }) {
   group.add(rocketsMesh);
 
   /**
+   * The SAM's guided rounds, drawn on their own buffer.
+   *
+   * A separate mesh rather than sharing the rocket buffer, because the two must never look alike:
+   * the aircraft's rockets are pale and slim, and a round coming the other way has to be instantly
+   * identifiable as hostile. Sixteen is more than any round can have in the air at once — sites are
+   * capped at one round each and the campaign has at most two sites.
+   */
+  const MISSILE_MESH_MAX = 16;
+  const missilesMesh = new THREE.InstancedMesh(
+    new THREE.CylinderGeometry(0.34, 0.34, 4.6, 6),
+    new THREE.MeshBasicMaterial({
+      color: 0xffb070, transparent: true, opacity: 0.96, depthWrite: false,
+      blending: THREE.AdditiveBlending,
+    }),
+    MISSILE_MESH_MAX,
+  );
+  missilesMesh.frustumCulled = false;
+  missilesMesh.count = 0;
+  group.add(missilesMesh);
+
+  /**
    * The best lock candidate: the target closest to the nose that is inside the cone and in range.
    *
    * "Closest to the nose" rather than "closest to the aircraft" on purpose. A gun 400 m away and
@@ -808,6 +1298,14 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     for (const t of turrets) {
       if (!t.alive) continue;
       consider(scratch.set(t.x, t.y + 27, t.z), 'turret', t);
+    }
+    for (const site of sams) {
+      if (!site.alive) continue;
+      consider(scratch.set(site.x, site.y + 4, site.z), 'sam', site);
+    }
+    for (const bomb of bombers) {
+      if (!bomb.alive) continue;
+      consider(bomb.position, 'bomber', bomb);
     }
     for (const d of drones) {
       if (!d.alive) continue;
@@ -942,11 +1440,13 @@ export function createAirDefence({ scene, terrain, round, haze }) {
       const t = r.target;
       const live = t && t.alive !== false;
       if (live) {
-        // A turret is a place, a drone is a thing that moves: the seeker aims at the gun house for
-        // one and at the airframe for the other.
+        // A ground target is a place, an aircraft is a thing that moves: the seeker aims at the
+        // launcher deck or the gun house for one and at the airframe for the other.
         const tp = r.kind === 'turret'
           ? rocketAim.set(t.x, t.y + 27, t.z)
-          : rocketAim.copy(t.position);
+          : r.kind === 'sam'
+            ? rocketAim.set(t.x, t.y + 4, t.z)
+            : rocketAim.copy(t.position);
         const dist = r.pos.distanceTo(tp);
         // Beyond its seeker's reach the round stops guiding rather than turning for a target it
         // has lost: a missile that chases across the whole map is a missile the pilot cannot dodge.
@@ -1016,6 +1516,24 @@ export function createAirDefence({ scene, terrain, round, haze }) {
         t.head.visible = false;
         killed.push({ type: 'kill', kind: 'turret', position: new THREE.Vector3(t.x, t.y + 27, t.z) });
       }
+    } else if (r.kind === 'sam') {
+      t.hp -= ORDNANCE.damage;
+      if (t.hp <= 0) {
+        t.alive = false;
+        t.root.visible = false;
+        spawnSpark(new THREE.Vector3(t.x, t.y + 4, t.z), 0xffa040, 3.4);
+        killed.push({ type: 'kill', kind: 'sam', position: new THREE.Vector3(t.x, t.y + 4, t.z) });
+      }
+    } else if (r.kind === 'bomber') {
+      t.hp -= ORDNANCE.damage;
+      if (t.hp <= 0) {
+        t.alive = false;
+        t.group.visible = false;
+        spawnSpark(t.position, 0xffb040, 3.6);
+        killed.push({
+          type: 'kill', kind: 'bomber', position: t.position.clone(), score: ENEMY.bomber.score,
+        });
+      }
     } else {
       t.hp -= ORDNANCE.damage;
       if (t.hp <= 0) {
@@ -1040,6 +1558,21 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     }
     rocketsMesh.count = n;
     rocketsMesh.instanceMatrix.needsUpdate = true;
+
+    // The SAM's rounds, in their own buffer and their own colour. They are drawn longer and hotter
+    // than the aircraft's rockets because they are the thing the pilot has to see coming: a guided
+    // round that arrives unannounced is a coin toss, not a threat that can be flown against.
+    const m = Math.min(missiles.length, MISSILE_MESH_MAX);
+    for (let i = 0; i < m; i += 1) {
+      const r = missiles[i];
+      tracerPos.copy(r.pos);
+      dirVec.copy(r.vel).normalize();
+      tracerQuat.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dirVec);
+      tracerMatrix.compose(tracerPos, tracerQuat, tracerScale);
+      missilesMesh.setMatrixAt(i, tracerMatrix);
+    }
+    missilesMesh.count = m;
+    missilesMesh.instanceMatrix.needsUpdate = true;
   }
 
   /**
@@ -1095,14 +1628,24 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     for (const t of turrets) if (t.alive) turretsAlive += 1;
     let dronesAlive = 0;
     for (const d of drones) if (d.alive) dronesAlive += 1;
+    let samsAlive = 0;
+    for (const s of sams) if (s.alive) samsAlive += 1;
+    let bombersAlive = 0;
+    for (const b of bombers) if (b.alive) bombersAlive += 1;
     return {
       turretsAlive,
       dronesAlive,
+      samsAlive,
+      bombersAlive,
       turretsTotal: turrets.length,
       dronesTotal: drones.length,
+      samsTotal: sams.length,
+      bombersTotal: bombers.length,
       /** Per-slot alive flags, so the HUD's pips go dark in place rather than shifting. */
       turretSlots: turrets.map((t) => t.alive),
       droneSlots: drones.map((d) => d.alive),
+      samSlots: sams.map((s) => s.alive),
+      bomberSlots: bombers.map((b) => b.alive),
       /** The nearest live threat, for the HUD's warning. */
       nearest: nearestThreat(),
       /**
@@ -1117,7 +1660,13 @@ export function createAirDefence({ scene, terrain, round, haze }) {
         return null;
       })(),
       /** How many rounds are in the air toward the aircraft. */
-      incoming: bullets.length,
+      incoming: bullets.length + missiles.length,
+      /** Guided rounds still flying, which the HUD calls out differently from tracers. */
+      missilesIncoming: missiles.length,
+      /** Live bombers, handed over so the HUD can draw a bracket on the nearest. */
+      bombers: bombers.filter((b) => b.alive),
+      /** Live SAM sites, same reason: the pilot needs to know which way to look. */
+      sams: sams.filter((s) => s.alive),
     };
   }
 
@@ -1130,22 +1679,32 @@ export function createAirDefence({ scene, terrain, round, haze }) {
       const d = Math.hypot(t.x - lastPos.x, t.z - lastPos.z);
       if (d < best) { best = d; kind = 'flak'; at = t; }
     }
+    for (const s of sams) {
+      if (!s.alive) continue;
+      const d = Math.hypot(s.x - lastPos.x, s.z - lastPos.z);
+      if (d < best) { best = d; kind = 'sam'; at = s; }
+    }
     for (const d of drones) {
       if (!d.alive) continue;
       const dd = d.position.distanceTo(lastPos);
       if (dd < best) { best = dd; kind = 'drone'; at = d; }
     }
+    for (const b of bombers) {
+      if (!b.alive) continue;
+      const dd = b.position.distanceTo(lastPos);
+      if (dd < best) { best = dd; kind = 'bomber'; at = b; }
+    }
     if (!kind) return null;
     // The bearing is what the HUD needs to point a chevron at it: without a position the warning
     // could only say "something is close", which is not enough to turn the right way.
-    const root = kind === 'flak' ? at.root.position : at.position;
+    const root = kind === 'flak' || kind === 'sam' ? at.root.position : at.position;
     const bearing = Math.atan2(root.x - lastPos.x, -(root.z - lastPos.z));
     return {
       distance: best,
       kind,
       bearing,
       x: root.x,
-      y: kind === 'flak' ? at.y + 27 : root.y,
+      y: kind === 'flak' ? at.y + 27 : kind === 'sam' ? at.y + 4 : root.y,
       z: root.z,
     };
   }
@@ -1162,6 +1721,9 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     scene.remove(group);
     scene.remove(tracers);
     scene.remove(slugsMesh);
+    // Rockets and missiles live on their own instanced meshes inside `group`; the arrays only need
+    // emptying, because the meshes are removed with the group.
+    missiles.length = 0;
     tracers.geometry.dispose();
     tracers.material.dispose();
     slugsMesh.geometry.dispose();
@@ -1184,6 +1746,9 @@ export function createAirDefence({ scene, terrain, round, haze }) {
     group,
     get turrets() { return turrets; },
     get drones() { return drones; },
+    get sams() { return sams; },
+    get bombers() { return bombers; },
+    get missiles() { return missiles; },
     get bullets() { return bullets; },
     get slugs() { return slugs; },
     get rockets() { return rockets; },

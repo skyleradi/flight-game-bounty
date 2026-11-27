@@ -262,18 +262,38 @@ export function scoreRound({
  * briefing all read the same answer — the bug that made a round impossible to finish was three
  * slightly different comparisons of the same two counts.
  */
-export function objectiveProgress(round, { turretsKilled = 0, dronesKilled = 0 } = {}) {
+export function objectiveProgress(round, {
+  turretsKilled = 0, dronesKilled = 0, samsKilled = 0, bombersKilled = 0,
+} = {}) {
   const need = round.winCondition ?? { flak: 0, drones: 0 };
   const flakNeed = need.flak ?? 0;
   const droneNeed = need.drones ?? 0;
+  // SAMs and bombers are optional in every round that has them: the campaign's later sorties ask
+  // for one ground threat and one air threat, and demanding a bomber the pilot never found would
+  // be a stuck round rather than a hard one. They are counted here so a round *can* ask, and so
+  // the HUD's total is right when it does.
+  const samNeed = need.sams ?? 0;
+  const bomberNeed = need.bombers ?? 0;
+  const totalNeed = flakNeed + droneNeed + samNeed + bomberNeed;
+  const done = Math.min(turretsKilled, flakNeed)
+    + Math.min(dronesKilled, droneNeed)
+    + Math.min(samsKilled, samNeed)
+    + Math.min(bombersKilled, bomberNeed);
   return {
     flakNeed,
     droneNeed,
+    samNeed,
+    bomberNeed,
     flakDone: Math.min(turretsKilled, flakNeed),
     droneDone: Math.min(dronesKilled, droneNeed),
+    samDone: Math.min(samsKilled, samNeed),
+    bomberDone: Math.min(bombersKilled, bomberNeed),
+    /** Total asked for and total met, so the HUD does not have to add four pairs itself. */
+    need: totalNeed,
+    done,
     /** False for a round that is flown with the guns cold, so the HUD can hide the line. */
-    required: flakNeed + droneNeed > 0,
-    met: turretsKilled >= flakNeed && dronesKilled >= droneNeed,
+    required: totalNeed > 0,
+    met: done >= totalNeed,
   };
 }
 

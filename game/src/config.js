@@ -164,6 +164,56 @@ export const ENEMY = {
   /** Points for a kill, before the round's difficulty scales it. */
   killScore: 60,
   /**
+   * A surface-to-air missile site.
+   *
+   * The turret is a tax on flying straight: its tracers are fast and flat, and the answer is to be
+   * somewhere else when they arrive. A SAM is a different problem. Its round follows, so the answer
+   * is not distance but geometry — put the nose across it, make it turn, and out-turn the motor. That
+   * is a second kind of defensive flying, which is what the campaign was missing: before this, every
+   * ground threat could be beaten by the same manoeuvre.
+   *
+   * The numbers are deliberately patient. `reload` is long enough that a site gets two or three
+   * shots at a pass, `turnRate` is below the aircraft's own so a hard break always wins, and `life`
+   * is short enough that a round fired at long range runs out before it arrives. A SAM you cannot
+   * out-turn is not a threat, it is a dice roll.
+   */
+  sam: {
+    health: 34,
+    /** How far it will engage, metres. Longer than the guns, because a missile carries. */
+    range: 2300,
+    /** Seconds between launches. */
+    reload: 5.4,
+    /** The round's motor and how hard it can turn. Under the aircraft's rate on purpose. */
+    speed: 205,
+    turnRate: 1.3,
+    /** Seconds of flight: a round launched at extreme range coasts out before it arrives. */
+    life: 8.5,
+    /** Warhead. Two hits and a half kill an aircraft at full health. */
+    damage: 24,
+    /** Metres at which the warhead detonates. Forgiving, so near misses still hurt. */
+    fuse: 17,
+  },
+  /**
+   * A bomber: big, slow, and carrying enough to end a round if it gets through.
+   *
+   * The interceptors are a dogfight and the guns are a tax; neither asks the pilot to *stop*
+   * something. A bomber flight does. It flies a straight line at a fixed speed toward the town, it
+   * does not manoeuvre, and it has enough health that it takes a sustained pass rather than a
+   * snapshot — so the round becomes about arriving with height and ammunition rather than about
+   * surviving.
+   */
+  bomber: {
+    health: 96,
+    /** Metres a second. Slower than the aircraft by a factor of three, so it can always be caught. */
+    speed: 46,
+    /** The dorsal gun it defends itself with. */
+    damage: 3.2,
+    range: 820,
+    burst: 3,
+    /** Points for stopping one, before difficulty. A flight of three is a round's worth of score. */
+    score: 260,
+  },
+  /**
    * What a flight leader is worth on top of its own kill.
    *
    * A leader flies tighter, leads its shots better and shoots at longer range, so downing one is a
@@ -423,7 +473,7 @@ export const CAMPAIGN = [
     difficulty: 1.55,
     hour: 18.9,
     /** The gorge is a shooting gallery: guns on the rims and drones running the floor. */
-    airDefence: { flak: 4, drones: 2 },
+    airDefence: { flak: 4, drones: 2, sams: 1 },
     /**
      * Two of the four rim guns have to come down before the course counts as flown.
      *
@@ -431,6 +481,11 @@ export const CAMPAIGN = [
      * a slot; putting two guns on the rim turns that slot into a decision — run it clean and take
      * the fire, or spend a pass and a burst of afterburner to silence the guns first. Either answer
      * is flying, which is the point.
+     *
+     * The SAM site is not a requirement, and that is deliberate: it is the round's first look at a
+     * weapon that follows, and meeting it while the gates still have to be flown is the lesson. A
+     * pilot who ignores it can still finish; a pilot who tries to fight it low and slow in a gorge
+     * will learn why nobody does that.
      */
     winCondition: { flak: 2, drones: 0 },
     objective: 'Silence two rim guns, then eight gates down in the gorge.',
@@ -481,13 +536,18 @@ export const CAMPAIGN = [
     visibility: 4400,
     difficulty: 1.9,
     hour: 21.6,
-    airDefence: { flak: 5, drones: 3 },
+    airDefence: { flak: 5, drones: 3, sams: 2, bombers: 3 },
     /**
-     * The campaign's last sortie asks for the whole aeroplane: a gun line to break and an
-     * interceptor flight to survive, with the gates flown through the middle of it.
+     * The campaign's last sortie asks for the whole aeroplane: a gun line to break, an interceptor
+     * flight to survive, and a bomber flight to stop before it reaches the town.
+     *
+     * One bomber, not three — the flight arrives as a line and the pilot has to break it, but a
+     * requirement of three would mean a pilot who killed two and ran out of ammunition is stuck in
+     * the last round of the campaign with nothing to learn. One is the mission; the other two are
+     * the score.
      */
-    winCondition: { flak: 3, drones: 2 },
-    objective: 'Break three guns and two interceptors, fly ten gates, land in the gale.',
+    winCondition: { flak: 3, drones: 2, bombers: 1 },
+    objective: 'Break three guns, two interceptors and a bomber, fly ten gates, land in the gale.',
     debrief: 'Storm front, ten gates, and a landing in one piece. That is the campaign.',
     sky: {
       top: '#28323d', mid: '#44515c', low: '#69767e', horizon: '#95a0a6',

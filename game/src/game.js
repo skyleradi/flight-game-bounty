@@ -262,6 +262,8 @@ export function createGame({ canvas, hudCanvas }) {
     kills: 0,
     turretsKilled: 0,
     dronesKilled: 0,
+    samsKilled: 0,
+    bombersKilled: 0,
     /** How many of those kills were flight leaders, which are paid at the leader's rate. */
     acesKilled: 0,
     /**
@@ -420,6 +422,8 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.kills = 0;
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
+    sortie.samsKilled = 0;
+    sortie.bombersKilled = 0;
     sortie.acesKilled = 0;
     sortie.objectiveMet = false;
     sortie.hitMark = null;
@@ -488,6 +492,8 @@ export function createGame({ canvas, hudCanvas }) {
       objectiveMet: sortie.objectiveMet,
       turretsKilled: sortie.turretsKilled,
       dronesKilled: sortie.dronesKilled,
+      samsKilled: sortie.samsKilled,
+      bombersKilled: sortie.bombersKilled,
       acesKilled: sortie.acesKilled ?? 0,
     };
 
@@ -537,6 +543,8 @@ export function createGame({ canvas, hudCanvas }) {
     sortie.kills = 0;
     sortie.turretsKilled = 0;
     sortie.dronesKilled = 0;
+    sortie.samsKilled = 0;
+    sortie.bombersKilled = 0;
     sortie.acesKilled = 0;
     sortie.objectiveMet = false;
     sortie.hitMark = null;
@@ -842,14 +850,25 @@ export function createGame({ canvas, hudCanvas }) {
         say(`Hit: ${Math.round(e.damage)} damage.`, 2.4);
       } else if (e.type === 'kill') {
         sortie.kills += 1;
+        // Kills are counted by kind because the objective needs to know *what* came down, not just
+        // how many things did. A round that asks for a bomber cannot be satisfied by a flak tower.
         if (e.kind === 'turret') sortie.turretsKilled += 1;
+        else if (e.kind === 'sam') sortie.samsKilled += 1;
+        else if (e.kind === 'bomber') sortie.bombersKilled += 1;
         else sortie.dronesKilled += 1;
         // A leader is worth several wingmen. The livery already told the pilot this machine was
         // different; the score has to agree or the difference was decoration.
         const worth = e.ace ? ENEMY.aceBonus : 1;
-        const points = Math.round(ENEMY.killScore * round.difficulty * worth);
+        // A bomber carries its own price — an airframe that takes a sustained pass and is trying to
+        // end the round is not worth an interceptor's sixty points. `score` on the event is set by
+        // the enemy that died, so the loop does not need a table of its own.
+        const base = e.score ?? ENEMY.killScore;
+        const points = Math.round(base * round.difficulty * worth);
         if (e.ace) sortie.acesKilled = (sortie.acesKilled ?? 0) + 1;
-        const what = e.kind === 'turret' ? 'Flak tower' : e.ace ? 'Flight leader' : 'Interceptor';
+        const what = e.kind === 'turret' ? 'Flak tower'
+          : e.kind === 'sam' ? 'Missile site'
+            : e.kind === 'bomber' ? 'Bomber'
+              : e.ace ? 'Flight leader' : 'Interceptor';
         say(`${what} destroyed. +${points}`, e.ace ? 4 : 2.6);
       }
     }
@@ -873,6 +892,8 @@ export function createGame({ canvas, hudCanvas }) {
     const objective = objectiveProgress(round, {
       turretsKilled: sortie.turretsKilled,
       dronesKilled: sortie.dronesKilled,
+      samsKilled: sortie.samsKilled,
+      bombersKilled: sortie.bombersKilled,
     });
     const wasMet = sortie.objectiveMet;
     sortie.objectiveMet = objective.met;
@@ -895,7 +916,7 @@ export function createGame({ canvas, hudCanvas }) {
         if (sortie.objectiveMet) {
           say('Course complete. Land back at Harrow Field.', 8);
         } else {
-          say(`Gates flown. ${objective.flakNeed - objective.flakDone + objective.droneNeed - objective.droneDone} target(s) still up.`, 8);
+          say(`Gates flown. ${objective.need - objective.done} target(s) still up.`, 8);
         }
       } else {
         const clean = Math.hypot(
@@ -1103,6 +1124,8 @@ export function createGame({ canvas, hudCanvas }) {
       objective: objectiveProgress(round, {
         turretsKilled: sortie.turretsKilled,
         dronesKilled: sortie.dronesKilled,
+        samsKilled: sortie.samsKilled,
+        bombersKilled: sortie.bombersKilled,
       }),
 
       // The autopilot's own line, so a pilot who has handed over the aircraft can see what it is
