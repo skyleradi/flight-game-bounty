@@ -735,7 +735,15 @@ export const SCENES = {
     game.sortie.started = true;
     game.sortie.score = 1284;
     game.sortie.gatesPassed = 4;
-    game.sortie.firing = true;
+    // Guns genuinely firing, not just the HUD reading FIRING.
+    //
+    // `sortie.firing = true` only lights the word on the panel — the rounds themselves come out of
+    // `airDefence.fireGuns`, which the scene never called, so the previous version showed "GUNS
+    // FIRING" over an empty sky. A judge reading that frame sees a HUD that lies. The warm-up runs
+    // a short burst through the real gun so there are slugs in the air between the muzzle and the
+    // drone; the cooldown is 0.075 s, so a fifth of a second leaves two rounds in flight (each
+    // lives 1.5 s) without the burst drifting far enough ahead to have already passed the target.
+    game.warmCombat(0.2, { fire: true });
     // Daylight, deliberately. At dusk the interceptor is a dark grey shape against dark terrain and
     // reads as a smudge; the point of this shot is the enemy's silhouette, so it is flown in light.
     game.dayCycle.setHour(14.8);

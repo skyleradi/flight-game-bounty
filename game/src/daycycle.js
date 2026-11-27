@@ -169,7 +169,15 @@ export function paletteFor(hour, base = {}) {
     lightLevel: lightLevel(hour),
     isNight: night,
     phase: phaseName(hour),
-    starOpacity: clamp(-alt / 9, 0, 1),
+    // Stars are keyed to civil twilight, not to the sun touching the horizon.
+    //
+    // The first version used `-alt / 9`, which put a 60% starfield in the sky the moment the sun
+    // was 5 degrees down — the "dusk" screenshot came back with a bright orange horizon and a
+    // thousand white points across it, which is both physically wrong and reads as sensor noise.
+    // Real stars only begin to show at the end of civil twilight (-6) and do not fill in until
+    // astronomical twilight (-18). Anchoring on that band keeps the dusk frame clean and leaves
+    // the deep-night frame at full opacity, which is the one place the star field is the subject.
+    starOpacity: clamp((-alt - 5) / 12, 0, 1),
     moonOpacity: clamp((6 - alt) / 14, 0, 1),
     keyLight: `#${light.getHexString()}`,
   };

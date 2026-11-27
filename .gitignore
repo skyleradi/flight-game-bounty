@@ -9,3 +9,4 @@ shots-*.mjs
 *.png
 !screenshots/*.png
 transcripts*.tar.gz
+.shot-backup-*/
