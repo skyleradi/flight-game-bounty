@@ -14,8 +14,10 @@
 
 import * as THREE from '../vendor/three.module.min.js';
 import { ENEMY, RUNWAY } from './config.js';
+import { createDogfight, createSquad, stepDogfight } from './dogfight.js';
 
 const tmp = new THREE.Vector3();
+const V_fwd = new THREE.Vector3();
 
 /** A cheap deterministic RNG, seeded per placement pass. */
 function makeRng(seed) {
@@ -296,6 +298,20 @@ export function createAirDefence({ scene, terrain, round, haze }) {
   placeTurrets(cfg.flak ?? 0);
   placeDrones(cfg.drones ?? 0);
 
+  // One squad book per round, shared by every interceptor: it is what stops three of them from
+  // stacking into a single gun. One ace per flight, so there is a leader worth fearing.
+  const squad = createSquad(drones.length);
+  const aceIndex = drones.length > 1 ? Math.floor(rng() * drones.length) : 0;
+  drones.forEach((d, i) => {
+    d.brain = createDogfight({
+      seed: round.id * 3701 + i * 911 + 17,
+      ace: i === aceIndex && drones.length > 1,
+      skill: 0.92 + rng() * 0.18,
+    });
+    d.speedNow = ENEMY.drone.speed;
+    d.hpLast = d.hp;
+  });
+
   if (haze) haze.patchObject(group);
 
   /** Muzzle flash on a turret, as a short-lived emissive cone. */
@@ -415,9 +431,9 @@ export function createAirDefence({ scene, terrain, round, haze }) {
       }
     }
 
-    // --- Drones. Each one turns toward a lead point on the aircraft and closes; when it is inside
-    // its own range and roughly on the nose it fires. Turning rate is capped below the aircraft's,
-    // which is what makes turning inside one the correct answer.
+    // --- Interceptors. Each one is a small state machine (see dogfight.js): patrol, pursue, attack,
+    // extend, evade. The squad book caps how many may press an attack at once, so a flight of three
+    // does not stack into one laser-accurate gun.
     for (const d of drones) {
       if (!d.alive) continue;
 
@@ -427,60 +443,61 @@ export function createAirDefence({ scene, terrain, round, haze }) {
       const dist = Math.hypot(dx, dy, dz);
       const cfgD = ENEMY.drone;
 
-      if (dist < cfgD.range * 3.2) {
-        // Lead the target, so a straight line is punished and a turn is rewarded.
-        const tof = dist / cfgD.speed;
-        const aimX = aircraftPos.x + aircraftVel.x * tof * 0.7;
-        const aimY = aircraftPos.y + aircraftVel.y * tof * 0.7;
-        const aimZ = aircraftPos.z + aircraftVel.z * tof * 0.7;
-        const wantHeading = Math.atan2(aimX - d.position.x, -(aimZ - d.position.z));
-        let turn = ((wantHeading - d.heading + Math.PI * 3) % (Math.PI * 2)) - Math.PI;
-        if (turn > Math.PI) turn -= Math.PI * 2;
-        const maxTurn = cfgD.turn * dt;
-        const applied = Math.max(-maxTurn, Math.min(maxTurn, turn));
-        d.heading += applied;
-        d.bank = THREE.MathUtils.lerp(d.bank, Math.max(-0.9, Math.min(0.9, -applied / Math.max(1e-4, dt) * 0.7)), 0.06);
-        // A dive toward the aircraft's height, capped so it does not lawn-dart into a ridge.
-        const groundHere = terrain.heightAt(d.position.x, d.position.z);
-        const wantPitch = Math.max(-0.55, Math.min(0.55, Math.atan2(dy, Math.hypot(dx, dz))));
-        d.pitch = THREE.MathUtils.lerp(d.pitch, wantPitch, 0.04);
-        if (d.position.y < groundHere + 90) d.pitch = Math.max(d.pitch, 0.12);
+      if (dist < cfgD.engageRange * 3.2) {
+        const brain = d.brain;
 
-        const fwd = new THREE.Vector3(
+        const shot = stepDogfight(d, {
+          cfg: cfgD,
+          terrain,
+          aircraftPos,
+          aircraftVel,
+          aircraftSpeed: aircraftState.speed,
+          squad,
+          time: sortieTime,
+          rng,
+        }, dt);
+
+        // Integrate. The brain set heading/pitch/speedNow; the caller owns position.
+        V_fwd.set(
           Math.sin(d.heading) * Math.cos(d.pitch),
           Math.sin(d.pitch),
           -Math.cos(d.heading) * Math.cos(d.pitch),
         );
-        // Close to gun range and hang there; further out, run at full speed.
-        const wantSpeed = dist > cfgD.range * 0.75 ? cfgD.speed : cfgD.speed * 0.72;
-        d.velocity.copy(fwd).multiplyScalar(wantSpeed);
+        d.velocity.copy(V_fwd).multiplyScalar(d.speedNow);
         d.position.addScaledVector(d.velocity, dt);
         d.group.position.copy(d.position);
         d.group.rotation.set(d.pitch, -d.heading, d.bank, 'YXZ');
 
-        // Fire when on the nose and in range. The cone is generous because the drone is aiming at
-        // a moving target from a moving platform.
-        d.cooldown -= dt;
-        if (dist < cfgD.range && d.cooldown <= 0) {
-          const nose = fwd.dot(new THREE.Vector3(dx, dy, dz).normalize());
-          if (nose > 0.96) {
-            fireBullet(
-              d.position.clone().addScaledVector(fwd, 5),
-              new THREE.Vector3(dx, dy, dz).normalize(),
-              ENEMY.bulletSpeed * 0.95,
-              cfgD.damage,
-              { spread: 0.02 },
-            );
-            d.cooldown = 1.1 + rng() * 1.3;
-          } else {
-            d.cooldown = 0.12;
-          }
+        if (shot.fire) {
+          fireBullet(
+            d.position.clone().addScaledVector(V_fwd, 5),
+            new THREE.Vector3(dx, dy, dz).normalize(),
+            ENEMY.bulletSpeed * 0.95,
+            cfgD.damage,
+            { spread: 0.022 },
+          );
+        }
+
+        // Being hit makes it break. This is set here rather than in the damage path because the
+        // brain needs it before its next decision, and `hp` is all the damage path touches.
+        if (d.hp < (d.hpLast ?? d.hp)) {
+          brain.hitFlash = 0.9;
+          d.hpLast = d.hp;
         }
       } else {
-        // Too far away: patrol toward the course rather than sitting still.
-        d.cooldown = 0.5;
+        // Out of contact: keep flying a patrol line so it is not a stationary target.
+        d.brain.timer = Math.min(d.brain.timer, 0.6);
       }
     }
+
+    // The squad book is derived, not accumulated: it is the number of live interceptors actually in
+    // the attack state right now. Recomputing it here means no transition can leak a slot, which is
+    // the bug the previous incremental version had.
+    let attacking = 0;
+    for (const d of drones) {
+      if (d.alive && d.brain.state === 'attack') attacking += 1;
+    }
+    squad.attackers = attacking;
 
     // --- Rounds. Integrated, then tested against the aircraft's position as a sphere. The aircraft
     // is 11 m across, so the hit sphere is generous enough that a round which visibly passes

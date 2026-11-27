@@ -138,7 +138,7 @@ export const ENEMY = {
   damage: 4.2,
   /** A turret's own hit points: they can be strafed, and killing one is worth points. */
   turretHealth: 26,
-  /** Drone behaviour. */
+  /** Interceptor behaviour. */
   drone: {
     speed: 78,
     turn: 1.15,
@@ -147,6 +147,19 @@ export const ENEMY = {
     /** How far ahead of the aircraft a drone aims, seconds. */
     lead: 1.5,
     damage: 3.4,
+    /** Range at which it stops patrolling and turns in. */
+    engageRange: 2600,
+    /**
+     * Seconds the nose must stay inside the firing cone before the gun actually fires.
+     *
+     * This is the interceptor's whole fairness contract. A snapshot misses even when the geometry
+     * momentarily lines up, so a hard break at the right moment beats a shot that was "aimed". It
+     * also means an interceptor cannot hit on the first frame it sees you, which is what made the
+     * old chase feel arbitrary.
+     */
+    settleTime: 0.55,
+    /** Rounds per burst, and the pause after one. A stream would be a wall; a burst is readable. */
+    burst: 4,
   },
   /** Points for a kill, before the round's difficulty scales it. */
   killScore: 60,
